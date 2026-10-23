@@ -1,0 +1,68 @@
+services:
+  bot:
+    build: .
+    container_name: bodypilot_bot
+    command: python -m bot.main
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+    healthcheck:
+      # curl в slim-образе нет — проверяем процесс бота через python (/proc/1)
+      test:
+        - CMD
+        - python
+        - -c
+        - import sys; sys.exit(0 if b'bot.main' in open('/proc/1/cmdline','rb').read() else 1)
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  api:
+    build: .
+    container_name: bodypilot_api
+    command: uvicorn api.main:app --host 0.0.0.0 --port 8000
+    restart: unless-stopped
+    env_file:
+      - .env
+    # Порт наружу не публикуем: снаружи ходит только Caddy (443)
+    expose:
+      - "8000"
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+    healthcheck:
+      # python гарантированно есть в образе; curl в slim отсутствует
+      test:
+        - CMD
+        - python
+        - -c
+        - import sys,urllib.request; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health',timeout=5).status==200 else 1)
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: bodypilot_caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      - DOMAIN=${DOMAIN:?Укажи DOMAIN в .env}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      api:
+        condition: service_healthy
+
+volumes:
+  caddy_data:
+  caddy_config:

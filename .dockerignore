@@ -1,0 +1,24 @@
+# Секреты — в образ не включаются (передаются через env_file)
+.env
+
+# База данных и логи — монтируются volume'ами
+data/*.db
+data/*.db-*
+logs/
+
+# VCS и IDE
+.git
+.idea
+.vscode
+.codesandbox
+.mimocode
+
+# Python-мусор
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Тесты и отладочные скрипты в прод-образ не нужны
+tests/
+scripts/
+data/ai_cache/

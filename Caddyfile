@@ -1,0 +1,13 @@
+# Домен подставляется из переменной окружения DOMAIN (см. .env)
+{$DOMAIN} {
+	reverse_proxy api:8000
+
+	# Mini App + API за одним доменом; сжатие для webapp
+	encode gzip
+
+	header {
+		# Мини-приложение открывается только в Telegram WebView
+		-Server
+		X-Content-Type-Options nosniff
+	}
+}

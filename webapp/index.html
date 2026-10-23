@@ -1,0 +1,475 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <title>BodyPilot</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="app" v-cloak>
+
+    <!-- Экран 401: нет авторизации -->
+    <div v-if="authError" class="auth-screen">
+        <div class="auth-emoji">🤖</div>
+        <h1>BodyPilot</h1>
+        <p>Открой приложение через кнопку в боте<br><b>@BodyPilot2_bot</b></p>
+    </div>
+
+    <template v-else>
+        <!-- Баннер потери связи -->
+        <div v-if="offline" class="offline-banner">
+            <span>📡 Нет связи, попробуй ещё</span>
+            <button class="btn btn-small" @click="retryLast">Повторить</button>
+        </div>
+
+        <!-- Шапка -->
+        <header class="app-header">
+            <div class="header-title">BodyPilot <span v-if="profile && profile.is_premium" class="badge-premium">PRO</span></div>
+            <div class="header-right">
+                <span v-if="profile && profile.streak" class="header-streak">🔥 {{ profile.streak }}</span>
+                <button class="settings-btn" title="Настройки профиля" @click="openSettings">⚙️</button>
+            </div>
+        </header>
+
+        <main class="content">
+
+            <!-- ════════ Вкладка: День ════════ -->
+            <section v-show="tab === 'day'">
+                <div class="greeting">
+                    <h2>{{ greeting }}, {{ displayName }}! 👋</h2>
+                    <p class="hint">{{ todayLabel }}</p>
+                </div>
+
+                <div v-if="loading.day" class="skeleton-wrap">
+                    <div class="skeleton sk-card"></div>
+                    <div class="skeleton sk-card"></div>
+                </div>
+
+                <template v-else>
+                    <!-- КБЖУ -->
+                    <div class="card">
+                        <div class="card-title">🍎 Питание сегодня</div>
+                        <div v-if="nutrition" class="kbju">
+                            <div class="ring-wrap">
+                                <svg class="ring" viewBox="0 0 120 120">
+                                    <circle class="ring-bg" cx="60" cy="60" r="52"/>
+                                    <circle class="ring-fg" :class="{over: calOver}" cx="60" cy="60" r="52"
+                                            :stroke-dasharray="ringDash" transform="rotate(-90 60 60)"/>
+                                </svg>
+                                <div class="ring-text">
+                                    <b>{{ fmt(nutrition.total_calories) }}</b>
+                                    <span v-if="nutrition.target_calories">/ {{ fmt(nutrition.target_calories) }} ккал</span>
+                                    <span v-else>ккал</span>
+                                </div>
+                            </div>
+                            <div class="macros">
+                                <div class="macro" v-for="m in macroBars" :key="m.label">
+                                    <div class="macro-head">
+                                        <span>{{ m.label }}</span>
+                                        <span>{{ fmt(m.value) }}<template v-if="m.target"> / {{ fmt(m.target) }}</template> г</span>
+                                    </div>
+                                    <div class="bar"><div class="bar-fill" :style="{width: m.pct + '%'}"
+                                         :class="{over: m.target && m.value > m.target}"></div></div>
+                                </div>
+                            </div>
+                        </div>
+                        <div v-if="nutrition && !nutrition.meals_count" class="empty">
+                            Напиши боту, что съел — появится здесь 🤖
+                        </div>
+                    </div>
+
+                    <!-- Вода -->
+                    <div class="card">
+                        <div class="card-title">💧 Вода</div>
+                        <div v-if="water" class="water-row">
+                            <div class="water-info">
+                                <b>{{ water.amount_ml }}</b> / {{ water.target_ml }} мл
+                                <div class="bar"><div class="bar-fill water"
+                                     :style="{width: pct(water.amount_ml, water.target_ml) + '%'}"></div></div>
+                            </div>
+                            <div class="water-btns">
+                                <button class="btn" @click="addWater(250)">+250</button>
+                                <button class="btn" @click="addWater(500)">+500</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Активность с часов -->
+                    <div class="card" v-if="hasHealthData">
+                        <div class="card-title">⌚ Активность</div>
+                        <ul class="ex-list">
+                            <li v-if="health.steps_today != null">
+                                <span>👟 Шаги сегодня</span>
+                                <span class="hint">{{ fmt(health.steps_today) }}</span>
+                            </li>
+                            <li v-if="health.sleep_last_night != null">
+                                <span>😴 Сон прошлой ночью</span>
+                                <span class="hint">{{ fmt(health.sleep_last_night) }} ч</span>
+                            </li>
+                            <li v-if="health.resting_hr_today != null">
+                                <span>❤️ Пульс покоя</span>
+                                <span class="hint">{{ fmt(health.resting_hr_today) }} уд/мин</span>
+                            </li>
+                        </ul>
+                    </div>
+
+                    <!-- Тренировка дня -->
+                    <div class="card">
+                        <div class="card-title">🏋️ Тренировка дня</div>
+                        <template v-if="workoutToday && workoutToday.exercises && workoutToday.exercises.length">
+                            <div class="chips">
+                                <span v-for="mod in workoutModules" :key="mod.key" class="chip">{{ mod.emoji }} {{ mod.title }}</span>
+                            </div>
+                            <ul class="ex-list">
+                                <li v-for="ex in workoutToday.exercises.slice(0, 3)" :key="ex.sort_order || ex.exercise_id">
+                                    <span>{{ ex.name }}</span>
+                                    <span class="hint">{{ exScheme(ex) }}</span>
+                                </li>
+                            </ul>
+                            <div class="hint" v-if="workoutToday.exercises.length > 3">
+                                и ещё {{ workoutToday.exercises.length - 3 }} — смотри во вкладке «Планы»
+                            </div>
+                        </template>
+                        <div v-else class="empty">Сегодня без тренировки. Отдохни или напиши боту 💪</div>
+                    </div>
+                </template>
+            </section>
+
+            <!-- ════════ Вкладка: Дневник ════════ -->
+            <section v-show="tab === 'diary'">
+                <div class="date-switch">
+                    <button class="btn btn-small" @click="shiftDiaryDate(-1)">◀</button>
+                    <div class="date-label">{{ diaryDateLabel }}</div>
+                    <button class="btn btn-small" :disabled="diaryIsToday" @click="shiftDiaryDate(1)">▶</button>
+                </div>
+
+                <div v-if="loading.diary" class="skeleton-wrap">
+                    <div class="skeleton sk-card"></div>
+                    <div class="skeleton sk-card"></div>
+                </div>
+
+                <template v-else>
+                    <div v-if="!diaryEntries.length" class="card empty">
+                        Записей пока нет.<br>Нажми «+ Добавить» или напиши боту, что съел 🍽
+                    </div>
+
+                    <div v-for="group in diaryGroups" :key="group.key" class="card">
+                        <div class="card-title">{{ group.emoji }} {{ group.title }}
+                            <span class="hint">· {{ fmt(group.calories) }} ккал</span>
+                        </div>
+                        <ul class="entry-list">
+                            <li v-for="e in group.entries" :key="e.id" class="entry">
+                                <div class="entry-main">
+                                    <div class="entry-name">{{ e.product_name }}</div>
+                                    <div class="hint">{{ fmt(e.weight_g) }} г · Б {{ fmt(e.protein_g) }} · Ж {{ fmt(e.fat_g) }} · У {{ fmt(e.carbs_g) }}</div>
+                                </div>
+                                <div class="entry-cal">{{ fmt(e.calories) }}<span class="hint"> ккал</span></div>
+                                <button class="btn-del" title="Удалить" @click="askDelete(e)">✕</button>
+                            </li>
+                        </ul>
+                    </div>
+
+                    <div v-if="diaryEntries.length" class="card total-card">
+                        <div class="card-title">Σ Итого за день</div>
+                        <div class="total-row">
+                            <span><b>{{ fmt(diaryTotals.calories) }}</b> ккал</span>
+                            <span>Б {{ fmt(diaryTotals.protein_g) }}</span>
+                            <span>Ж {{ fmt(diaryTotals.fat_g) }}</span>
+                            <span>У {{ fmt(diaryTotals.carbs_g) }}</span>
+                        </div>
+                    </div>
+
+                    <button class="btn btn-block" @click="openAddPanel">+ Добавить</button>
+                </template>
+            </section>
+
+            <!-- ════════ Вкладка: Прогресс ════════ -->
+            <section v-show="tab === 'progress'">
+                <div v-if="loading.progress" class="skeleton-wrap">
+                    <div class="skeleton sk-card"></div>
+                    <div class="skeleton sk-card"></div>
+                    <div class="skeleton sk-card"></div>
+                </div>
+                <template v-else>
+                    <div class="card">
+                        <div class="card-title">⚖️ Вес, 30 дней</div>
+                        <div v-if="weightHistory.length" class="chart-wrap"><canvas ref="weightChart"></canvas></div>
+                        <div v-else class="empty">Пока нет данных о весе. Напиши боту свой вес ⚖️</div>
+                    </div>
+                    <div class="card">
+                        <div class="card-title">🔥 Калории, 7 дней</div>
+                        <div v-if="nutritionSummary.length" class="chart-wrap"><canvas ref="calChart"></canvas></div>
+                        <div v-else class="empty">Нет записей о питании за неделю</div>
+                    </div>
+                    <div class="card">
+                        <div class="card-title">🏋️ Тренировки, 7 дней</div>
+                        <div v-if="workoutHistory.length" class="chart-wrap"><canvas ref="workoutChart"></canvas></div>
+                        <div v-else class="empty">Нет тренировок за неделю. Самое время начать! 💪</div>
+                    </div>
+                    <div class="card">
+                        <div class="card-title">👟 Шаги, 14 дней</div>
+                        <div v-if="healthSteps.length" class="chart-wrap"><canvas ref="stepsChart"></canvas></div>
+                        <div v-else class="empty">Нет данных о шагах. Подключи часы или напиши боту /activity ⌚</div>
+                    </div>
+                    <div class="card">
+                        <div class="card-title">😴 Сон, 14 дней</div>
+                        <div v-if="healthSleep.length" class="chart-wrap"><canvas ref="sleepChart"></canvas></div>
+                        <div v-else class="empty">Нет данных о сне за последние дни</div>
+                    </div>
+
+                    <!-- Челленджи -->
+                    <div class="card">
+                        <div class="card-title">🎯 Челленджи</div>
+                        <div v-if="!challenges.length" class="empty">Челленджи загружаются…</div>
+                        <div v-for="ch in challenges" :key="ch.code" class="challenge">
+                            <div class="challenge-head">
+                                <span class="challenge-name">{{ ch.name }}</span>
+                                <span v-if="ch.status === 'completed'" class="badge-done">🏆 Выполнен</span>
+                                <span v-else-if="ch.status === 'failed'" class="badge-fail">Провален</span>
+                            </div>
+                            <div class="hint">{{ ch.condition }}</div>
+                            <template v-if="ch.status === 'active'">
+                                <div class="bar challenge-bar">
+                                    <div class="bar-fill" :style="{width: pct(ch.current, ch.target) + '%'}"></div>
+                                </div>
+                                <div class="hint">{{ ch.current }} / {{ ch.target }} {{ ch.unit }}</div>
+                            </template>
+                            <button v-if="ch.status === 'not_joined'" class="btn btn-small"
+                                    :disabled="joiningCode === ch.code" @click="joinChallenge(ch.code)">
+                                {{ joiningCode === ch.code ? '…' : 'Участвовать' }}
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Фото прогресса -->
+                    <div class="card">
+                        <div class="card-title">📸 Фото прогресса</div>
+                        <template v-if="photos.length">
+                            <div v-if="photoDynamics" class="hint photo-dynamics">{{ photoDynamics }}</div>
+                            <div class="photo-grid">
+                                <div v-for="p in photos" :key="p.id" class="photo-cell" @click="photoViewer = p">
+                                    <img v-if="p.url" :src="p.url" :alt="'Фото от ' + photoDate(p)" loading="lazy">
+                                    <div v-else class="photo-loading">…</div>
+                                </div>
+                            </div>
+                        </template>
+                        <div v-else class="empty">Фото пока нет 📷</div>
+                        <div class="hint photo-hint">Добавить фото — в боте: Прогресс → Фото прогресса</div>
+                    </div>
+                </template>
+            </section>
+
+            <!-- ════════ Вкладка: Коуч ════════ -->
+            <section v-show="tab === 'coach'" class="coach-section">
+                <div ref="chatBox" class="chat-box">
+                    <div v-if="!chatMessages.length" class="empty chat-empty">
+                        Привет! Я твой AI-коуч 🤖<br>
+                        Спроси про питание, тренировки или напиши, что съел, — запишу в дневник.
+                    </div>
+                    <div v-for="(m, i) in chatMessages" :key="i" class="chat-msg"
+                         :class="m.role === 'user' ? 'chat-user' : 'chat-coach'">
+                        <div v-for="(t, j) in m.tools || []" :key="'t' + j" class="chat-tool">✅ {{ t }}</div>
+                        <div class="chat-text">{{ m.text }}</div>
+                    </div>
+                    <div v-if="chatSending" class="chat-msg chat-coach">
+                        <div class="chat-text hint">Коуч думает…</div>
+                    </div>
+                </div>
+                <div class="chat-input">
+                    <input v-model="chatInput" class="input" placeholder="Спроси коуча…"
+                           maxlength="2000" :disabled="chatSending"
+                           @keyup.enter="sendChat">
+                    <button class="btn btn-primary chat-send" :disabled="chatSending || !chatInput.trim()"
+                            @click="sendChat">➤</button>
+                </div>
+            </section>
+
+            <!-- ════════ Вкладка: Планы ════════ -->
+            <section v-show="tab === 'plans'">
+                <div class="plans-head">
+                    <button class="btn" @click="loadPlans">🔄 Обновить</button>
+                </div>
+
+                <div v-if="loading.plans" class="skeleton-wrap">
+                    <div class="skeleton sk-card"></div>
+                    <div class="skeleton sk-card"></div>
+                </div>
+
+                <template v-else>
+                    <!-- План питания -->
+                    <div class="card">
+                        <div class="card-title">🍽 План питания на сегодня</div>
+                        <template v-if="mealPlan && mealPlan.meals">
+                            <div v-for="m in mealPlanList" :key="m.key" class="meal-plan-item">
+                                <div class="meal-plan-head">
+                                    <span>{{ m.emoji }} {{ m.title }}</span>
+                                    <span class="hint">{{ fmt(m.item.cal) }} ккал</span>
+                                </div>
+                                <div class="meal-plan-name">{{ m.item.name }}</div>
+                                <div class="hint">Б {{ fmt(m.item.p) }} · Ж {{ fmt(m.item.f) }} · У {{ fmt(m.item.c) }}</div>
+                            </div>
+                            <div class="total-row plan-total">
+                                <span>Цель: <b>{{ fmt(mealPlan.calorie_target) }}</b> ккал</span>
+                                <span>Б {{ fmt(mealPlan.macros_target.protein_g) }}</span>
+                                <span>Ж {{ fmt(mealPlan.macros_target.fat_g) }}</span>
+                                <span>У {{ fmt(mealPlan.macros_target.carbs_g) }}</span>
+                            </div>
+                        </template>
+                        <div v-else-if="mealPlanError === 422" class="empty">
+                            Заполни профиль в боте (рост, вес, возраст) — и получишь план 🍽
+                        </div>
+                        <div v-else class="empty">План питания пока недоступен</div>
+                    </div>
+
+                    <!-- План тренировки -->
+                    <div class="card">
+                        <div class="card-title">🏋️ План тренировки</div>
+                        <template v-if="workoutPlan && workoutPlan.exercises && workoutPlan.exercises.length">
+                            <div v-for="mod in workoutPlanModules" :key="mod.key" class="module">
+                                <div class="module-title">{{ mod.emoji }} {{ mod.title }}</div>
+                                <ul class="ex-list">
+                                    <li v-for="ex in mod.items" :key="(ex.sort_order || 0) + '_' + (ex.exercise_id || ex.name)">
+                                        <div>
+                                            <div>{{ ex.name }}</div>
+                                            <div class="hint" v-if="ex.note">{{ ex.note }}</div>
+                                        </div>
+                                        <span class="hint">{{ exScheme(ex) }}</span>
+                                    </li>
+                                </ul>
+                            </div>
+                        </template>
+                        <div v-else class="empty">План тренировки пока недоступен. Напиши боту 💬</div>
+                    </div>
+                </template>
+            </section>
+        </main>
+
+        <!-- Нижний таб-бар -->
+        <nav class="tabbar">
+            <button v-for="t in tabs" :key="t.key" class="tab" :class="{active: tab === t.key}"
+                    @click="switchTab(t.key)">
+                <span class="tab-emoji">{{ t.emoji }}</span>
+                <span class="tab-label">{{ t.label }}</span>
+            </button>
+        </nav>
+
+        <!-- Панель добавления продукта -->
+        <div v-if="addPanel" class="sheet-backdrop" @click.self="closeAddPanel">
+            <div class="sheet">
+                <div class="card-title">➕ Добавить продукт</div>
+
+                <div class="sheet-row">
+                    <select v-model="addForm.meal_type" class="input">
+                        <option value="breakfast">🍳 Завтрак</option>
+                        <option value="lunch">🍲 Обед</option>
+                        <option value="dinner">🌙 Ужин</option>
+                        <option value="snack">🍎 Перекус</option>
+                    </select>
+                </div>
+
+                <input v-model="searchQuery" class="input" placeholder="Поиск продукта…" @input="onSearchInput">
+
+                <div v-if="searching" class="hint sheet-hint">Ищем…</div>
+                <div v-else-if="searchQuery && !searchResults.length && searchDone" class="hint sheet-hint">Ничего не нашлось 🤷</div>
+
+                <ul v-if="!selectedProduct" class="search-list">
+                    <li v-for="p in searchResults" :key="p.id" @click="selectProduct(p)">
+                        <div>
+                            <div>{{ p.name }}</div>
+                            <div class="hint">{{ p.category }}</div>
+                        </div>
+                        <span class="hint">{{ fmt(p.calories) }} ккал/100г</span>
+                    </li>
+                </ul>
+
+                <div v-if="selectedProduct" class="picked">
+                    <div class="picked-name">{{ selectedProduct.name }}</div>
+                    <div class="hint">на 100 г: {{ fmt(selectedProduct.calories) }} ккал ·
+                        Б {{ fmt(selectedProduct.protein_g) }} · Ж {{ fmt(selectedProduct.fat_g) }} · У {{ fmt(selectedProduct.carbs_g) }}</div>
+                    <div class="sheet-row grams-row">
+                        <input v-model.number="addForm.weight_g" class="input" type="number" min="1" max="10000"
+                               inputmode="numeric" placeholder="Граммы">
+                        <div class="picked-calc" v-if="addForm.weight_g > 0">
+                            ≈ <b>{{ fmt(selectedProduct.calories * addForm.weight_g / 100) }}</b> ккал
+                        </div>
+                    </div>
+                    <div class="sheet-row">
+                        <button class="btn" @click="selectedProduct = null">← Назад</button>
+                        <button class="btn btn-primary" :disabled="!addForm.weight_g || addForm.weight_g <= 0 || saving"
+                                @click="saveEntry">{{ saving ? 'Сохраняю…' : 'Добавить' }}</button>
+                    </div>
+                </div>
+
+                <button class="btn btn-block sheet-close" @click="closeAddPanel">Закрыть</button>
+            </div>
+        </div>
+
+        <!-- Подтверждение удаления -->
+        <div v-if="deleteTarget" class="sheet-backdrop" @click.self="deleteTarget = null">
+            <div class="sheet sheet-confirm">
+                <div class="card-title">Удалить запись?</div>
+                <p>{{ deleteTarget.product_name }} — {{ fmt(deleteTarget.weight_g) }} г</p>
+                <div class="sheet-row">
+                    <button class="btn" @click="deleteTarget = null">Отмена</button>
+                    <button class="btn btn-danger" :disabled="saving" @click="confirmDelete">Удалить</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Настройки профиля -->
+        <div v-if="settingsOpen" class="sheet-backdrop" @click.self="settingsOpen = false">
+            <div class="sheet">
+                <div class="card-title">⚙️ Профиль</div>
+                <label class="form-label">Вес, кг</label>
+                <input v-model.number="settingsForm.weight_kg" class="input" type="number"
+                       min="20" max="500" step="0.1" inputmode="decimal">
+                <label class="form-label">Рост, см</label>
+                <input v-model.number="settingsForm.height_cm" class="input" type="number"
+                       min="80" max="300" step="1" inputmode="decimal">
+                <label class="form-label">Возраст</label>
+                <input v-model.number="settingsForm.age" class="input" type="number"
+                       min="10" max="120" step="1" inputmode="numeric">
+                <label class="form-label">Цель</label>
+                <select v-model="settingsForm.goal" class="input">
+                    <option value="lose">Похудение</option>
+                    <option value="maintain">Поддержание</option>
+                    <option value="gain">Набор массы</option>
+                </select>
+                <label class="form-label">Активность</label>
+                <select v-model="settingsForm.activity" class="input">
+                    <option value="sedentary">Малоподвижная</option>
+                    <option value="moderate">Умеренная</option>
+                    <option value="high">Высокая</option>
+                </select>
+                <div class="sheet-row">
+                    <button class="btn" @click="settingsOpen = false">Отмена</button>
+                    <button class="btn btn-primary" :disabled="settingsSaving" @click="saveSettings">
+                        {{ settingsSaving ? 'Сохраняю…' : 'Сохранить' }}
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Полноэкранный просмотр фото -->
+        <div v-if="photoViewer" class="photo-viewer" @click="photoViewer = null">
+            <img v-if="photoViewer.url" :src="photoViewer.url" alt="Фото прогресса">
+            <div class="photo-viewer-caption">
+                {{ photoDate(photoViewer) }}<template v-if="photoViewer.weight_kg"> · {{ fmt(photoViewer.weight_kg) }} кг</template>
+                <template v-if="photoViewer.note"> · {{ photoViewer.note }}</template>
+            </div>
+        </div>
+
+        <!-- Toast -->
+        <transition name="toast">
+            <div v-if="toast" class="toast">{{ toast }}</div>
+        </transition>
+    </template>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
