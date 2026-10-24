@@ -5,10 +5,13 @@
 что никто не забрал: текст без "/" и без активного FSM-состояния,
 а также голосовые/аудио сообщения (их никто другой не ловит).
 
-Логика: сначала пробуем распознать еду (recognize_food_from_text /
-recognize_food_from_voice), при успехе показываем карточку с КБЖУ и
-кнопками подтверждения. Если это не еда — передаём текст (или транскрипт
-голосового) AI-коучу (кэш/шаблоны → chat_with_tools).
+Логика текста: сначала пробуем распознать еду (recognize_food_from_text),
+при успехе показываем карточку с КБЖУ и кнопками подтверждения. Если это не
+еда — передаём текст AI-коучу (кэш/шаблоны → chat_with_tools).
+
+Логика голоса: transcribe_voice → транскрипт целиком уходит AI-коучу
+(chat_with_tools), который сам записывает еду (log_food_batch / log_food) или
+тренировку (log_workout_done) и отвечает подтверждением.
 """
 
 import html
@@ -306,7 +309,12 @@ NOT_HEARD_TEXT = "🎤 Не расслышал — напиши текстом, 
 
 @router.message(StateFilter(None), F.voice | F.audio)
 async def handle_voice(message: Message, state: FSMContext, user_id: int = None):
-    """Голосовое: расшифровка Gemini → еда (карточка) или транскрипт коучу."""
+    """Голосовое = прямой вход в AI-коуча: транскрипция → chat_with_tools.
+
+    Коуч сам разбирает транскрипт (там может быть несколько блюд за день или
+    отчёт о тренировке) и записывает через log_food_batch / log_food /
+    log_workout_done. Карточка одного блюда для голоса не используется.
+    """
     uid = user_id if user_id else message.from_user.id
 
     # Страховка: не перехватываем ввод в активных FSM-сценариях
@@ -342,7 +350,7 @@ async def handle_voice(message: Message, state: FSMContext, user_id: int = None)
         buf = await message.bot.download_file(file.file_path)
         audio_bytes = buf.read()
 
-        result = await client.recognize_food_from_voice(audio_bytes, mime_type=mime_type)
+        result = await client.transcribe_voice(audio_bytes, mime_type=mime_type)
 
         if result and result.get("error") == "rate_limit":
             await message.bot.delete_message(message.chat.id, status_message.message_id)
@@ -350,32 +358,18 @@ async def handle_voice(message: Message, state: FSMContext, user_id: int = None)
             return
 
         transcript = str((result or {}).get("transcript") or "").strip()
-        food = _extract_food(result)
 
         await message.bot.delete_message(message.chat.id, status_message.message_id)
 
-        # Еда распознана уверенно — та же карточка подтверждения, что и для текста
-        if food:
-            await state.update_data(smart_food=food)
-            header = ""
-            if transcript:
-                header = f"🎤 Распознал: «{html.escape(transcript[:300])}»\n\n"
-            await message.answer(
-                header + _food_card_text(food), reply_markup=_food_card_keyboard()
-            )
-            return
-
         # Gemini не принял голос или ничего не расслышал
-        if not result or not transcript:
-            await message.answer(NOT_HEARD_TEXT)
-            return
-
-        # Не еда — передаём транскрипт коучу как обычный текст
         if len(transcript) < 3:
             await message.answer(NOT_HEARD_TEXT)
             return
 
-        answer = await _ask_coach(uid, user, transcript, direct=has_food_intent(transcript))
+        # Транскрипт есть — передаём коучу как есть: он запишет еду/тренировку
+        # через инструменты и ответит подтверждением
+        coach_text = f"[Голосовое сообщение, расшифровка]: {transcript}"
+        answer = await _ask_coach(uid, user, coach_text, direct=True)
         prefix = f"🎤 Распознал: «{html.escape(transcript[:300])}»\n\n"
         if answer:
             await message.answer(prefix + answer)

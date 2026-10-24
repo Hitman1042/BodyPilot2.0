@@ -217,6 +217,39 @@ TOOL_DECLARATIONS = [
         "parameters": {"type": "object", "properties": {}},
     },
     {
+        "name": "log_workout_done",
+        "description": (
+            "Записать ВЫПОЛНЕННУЮ тренировку, о которой отчитался пользователь "
+            "(«сделал тренировку: 3 подхода приседаний и отжимания», «пробежал 5 км»). "
+            "Вызывай всегда, когда пользователь сообщает о факте тренировки. "
+            "Запись учитывается в стриках, челленджах и статистике."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "duration_min": {
+                    "type": "integer",
+                    "description": "Длительность тренировки в минутах (1-600); если не указана — оцени сам",
+                },
+                "description": {
+                    "type": "string",
+                    "description": "Краткое описание тренировки на русском (например, «приседания и отжимания»)",
+                },
+                "exercises": {
+                    "type": "array",
+                    "description": "Упражнения свободным текстом (опционально)",
+                    "items": {"type": "string"},
+                },
+                "workout_type": {
+                    "type": "string",
+                    "enum": ["strength", "cardio", "hiit", "yoga", "stretching"],
+                    "description": "Тип тренировки; по умолчанию strength",
+                },
+            },
+            "required": ["duration_min", "description"],
+        },
+    },
+    {
         "name": "get_weekly_stats",
         "description": "Получить статистику пользователя за последние 7 дней (калории, белок, тренировки, вес, тоннаж).",
         "parameters": {"type": "object", "properties": {}},
@@ -414,6 +447,59 @@ def _tool_log_food(user_id: int, args: Dict) -> Dict:
             f"(Б {protein_g:g} / Ж {fat_g:g} / У {carbs_g:g}), "
             f"{MEAL_NAMES_RU[meal_type]}"
         ),
+    }
+
+
+LOG_FOOD_BATCH_MAX_ITEMS = 10
+
+
+def _tool_log_food_batch(user_id: int, args: Dict) -> Dict:
+    """Записать несколько блюд за раз: каждую позицию — через логику log_food.
+
+    Невалидные позиции отклоняются по одной (их ошибки возвращаются модели),
+    остальные записываются. Полный провал = ни одной записи.
+    """
+    items = args.get("items")
+    if not isinstance(items, list) or not items:
+        return {"error": "items должен быть непустым массивом позиций"}
+    if len(items) > LOG_FOOD_BATCH_MAX_ITEMS:
+        return {"error": f"слишком много позиций: {len(items)} (максимум {LOG_FOOD_BATCH_MAX_ITEMS})"}
+
+    logged: list[Dict] = []
+    rejected: list[str] = []
+    for idx, item in enumerate(items, start=1):
+        if not isinstance(item, dict):
+            rejected.append(f"позиция {idx}: не объект")
+            continue
+        result = _tool_log_food(user_id, item)
+        if "error" in result:
+            name = str(item.get("product_name") or "").strip() or f"позиция {idx}"
+            rejected.append(f"«{name}»: {result['error']}")
+        else:
+            logged.append(result)
+
+    if not logged:
+        return {"error": "ни одна позиция не записана: " + "; ".join(rejected)}
+
+    total_calories = round(sum(r["calories"] for r in logged), 1)
+    names = [r["product_name"] for r in logged]
+    names_text = ", ".join(names[:3])
+    if len(names) > 3:
+        names_text += ", …"
+
+    summary = (
+        f"Записал {len(logged)} приёмов пищи: {names_text} — всего {total_calories:g} ккал"
+    )
+    if rejected:
+        summary += f". Не записано ({len(rejected)}): " + "; ".join(rejected)
+
+    return {
+        "ok": True,
+        "logged_count": len(logged),
+        "entry_ids": [r["entry_id"] for r in logged],
+        "total_calories": total_calories,
+        "rejected": rejected,
+        "summary": summary,
     }
 
 
@@ -642,6 +728,87 @@ def _tool_get_weekly_stats(user_id: int, args: Dict) -> Dict:
     return {"ok": True, "stats": stats}
 
 
+WORKOUT_TYPES = {"strength", "cardio", "hiit", "yoga", "stretching"}
+# Синонимы на случай, если модель пришлёт значение не из enum
+_WORKOUT_TYPE_SYNONYMS = {
+    "силовая": "strength", "сила": "strength", "strength": "strength",
+    "кардио": "cardio", "бег": "cardio", "cardio": "cardio",
+    "hiit": "hiit", "вит": "hiit",
+    "йога": "yoga", "yoga": "yoga",
+    "растяжка": "stretching", "stretching": "stretching",
+}
+WORKOUT_TYPE_NAMES_RU = {
+    "strength": "силовая",
+    "cardio": "кардио",
+    "hiit": "HIIT",
+    "yoga": "йога",
+    "stretching": "растяжка",
+}
+
+
+def _tool_log_workout_done(user_id: int, args: Dict) -> Dict:
+    """Записать выполненную тренировку в workout_sessions.
+
+    Схема: type ограничен CHECK ('strength','cardio','hiit','yoga','stretching')
+    — 'custom' невозможен, поэтому описание храним в notes. Запись через
+    create_session подхватывается стриками/челленджами/статистикой автоматически.
+    """
+    from core.database.workout import create_session
+
+    duration_min = _to_int(args.get("duration_min"))
+    if duration_min is None or not (1 <= duration_min <= 600):
+        return {"error": "duration_min должен быть от 1 до 600 минут"}
+
+    description = str(args.get("description") or "").strip()
+    if not description:
+        return {"error": "не указано описание тренировки"}
+    if len(description) > 500:
+        return {"error": "description слишком длинный (макс 500 символов)"}
+
+    exercises = args.get("exercises")
+    exercise_names: list[str] = []
+    if exercises is not None:
+        if not isinstance(exercises, list):
+            return {"error": "exercises должен быть массивом строк"}
+        exercise_names = [str(e).strip() for e in exercises if str(e).strip()][:20]
+
+    workout_type = str(args.get("workout_type") or "strength").strip().lower()
+    workout_type = _WORKOUT_TYPE_SYNONYMS.get(workout_type, workout_type)
+    if workout_type not in WORKOUT_TYPES:
+        return {"error": "workout_type должен быть strength/cardio/hiit/yoga/stretching"}
+
+    notes = description
+    if exercise_names:
+        notes += ": " + ", ".join(exercise_names)
+
+    session_id = create_session(
+        user_id=user_id,
+        session_type=workout_type,
+        duration_min=duration_min,
+        notes=notes,
+    )
+
+    from core.ai.chat_history import append_event
+    append_event(
+        user_id,
+        f"[событие: тренировка записана — {WORKOUT_TYPE_NAMES_RU[workout_type]}, "
+        f"{duration_min} мин: {notes[:150]}]",
+    )
+
+    return {
+        "ok": True,
+        "session_id": session_id,
+        "workout_type": workout_type,
+        "duration_min": duration_min,
+        "description": description,
+        "exercises": exercise_names,
+        "summary": (
+            f"Записал тренировку: {duration_min} мин ({WORKOUT_TYPE_NAMES_RU[workout_type]}) — "
+            f"{description[:100]}"
+        ),
+    }
+
+
 # ── Предпочтения и перегенерация планов ──────────────────────────────────
 
 def _invalidate_meal_plan_cache(user_id: int) -> None:
@@ -814,12 +981,14 @@ def _tool_regenerate_meal_plan(user_id: int, args: Dict) -> Dict:
 
 _HANDLERS = {
     "log_food": _tool_log_food,
+    "log_food_batch": _tool_log_food_batch,
     "adjust_last_food_entry": _tool_adjust_last_food_entry,
     "get_today_nutrition": _tool_get_today_nutrition,
     "get_nutrition_history": _tool_get_nutrition_history,
     "log_weight": _tool_log_weight,
     "update_profile": _tool_update_profile,
     "get_workout_plan_today": _tool_get_workout_plan_today,
+    "log_workout_done": _tool_log_workout_done,
     "get_weekly_stats": _tool_get_weekly_stats,
     "set_training_preferences": _tool_set_training_preferences,
     "regenerate_workout_plan": _tool_regenerate_workout_plan,

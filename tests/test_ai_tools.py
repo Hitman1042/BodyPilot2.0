@@ -16,9 +16,9 @@ def test_tool_declarations_valid():
         assert decl["description"]
         assert decl["parameters"]["type"] == "object"
     assert names == {
-        "log_food", "adjust_last_food_entry", "get_today_nutrition",
+        "log_food", "log_food_batch", "adjust_last_food_entry", "get_today_nutrition",
         "get_nutrition_history", "log_weight", "update_profile",
-        "get_workout_plan_today", "get_weekly_stats",
+        "get_workout_plan_today", "log_workout_done", "get_weekly_stats",
         "set_training_preferences", "regenerate_workout_plan",
         "set_food_preferences", "regenerate_meal_plan",
     }
@@ -164,6 +164,166 @@ def test_adjust_last_food_entry_validation(test_user):
     assert "error" in execute_tool(test_user, "adjust_last_food_entry", {"multiplier": 0.01})
     assert "error" in execute_tool(test_user, "adjust_last_food_entry", {"new_weight_g": 6000})
     assert "error" in execute_tool(test_user, "adjust_last_food_entry", {})
+
+
+def test_log_food_batch_valid(test_user):
+    """3 валидные позиции → 3 записи, summary содержит сумму ккал."""
+    result = execute_tool(test_user, "log_food_batch", {
+        "items": [
+            {"product_name": "Омлет из двух яиц", "weight_g": 150, "calories": 210,
+             "protein_g": 13, "fat_g": 15, "carbs_g": 2, "meal_type": "breakfast"},
+            {"product_name": "Гречка с курицей", "weight_g": 300, "calories": 480,
+             "protein_g": 35, "fat_g": 12, "carbs_g": 55, "meal_type": "lunch"},
+            {"product_name": "Творог 5%", "weight_g": 200, "calories": 240,
+             "protein_g": 34, "fat_g": 10, "carbs_g": 6, "meal_type": "dinner"},
+        ],
+    })
+    assert result["ok"] is True
+    assert result["logged_count"] == 3
+    assert len(result["entry_ids"]) == 3
+    assert result["total_calories"] == pytest.approx(930)
+    assert "930" in result["summary"]
+    assert "Омлет из двух яиц" in result["summary"]
+
+    summary = get_today_summary(test_user)
+    assert summary["total_calories"] >= 930
+    assert summary["meals_count"] >= 3
+
+
+def test_log_food_batch_partial_invalid(test_user):
+    """Невалидная позиция отклоняется, остальные записываются."""
+    before = get_today_summary(test_user)["meals_count"]
+    result = execute_tool(test_user, "log_food_batch", {
+        "items": [
+            {"product_name": "Яблоко", "weight_g": 150, "calories": 80,
+             "protein_g": 0.5, "fat_g": 0.5, "carbs_g": 20, "meal_type": "snack"},
+            {"product_name": "Битый арбуз", "weight_g": 99999, "calories": 100,
+             "protein_g": 1, "fat_g": 0, "carbs_g": 20, "meal_type": "snack"},
+        ],
+    })
+    assert result["ok"] is True
+    assert result["logged_count"] == 1
+    assert len(result["rejected"]) == 1
+    assert "Битый арбуз" in result["rejected"][0]
+    assert get_today_summary(test_user)["meals_count"] == before + 1
+
+
+def test_log_food_batch_too_many(test_user):
+    """Больше 10 позиций — отказ целиком."""
+    items = [
+        {"product_name": f"Блюдо {i}", "weight_g": 100, "calories": 100,
+         "protein_g": 5, "fat_g": 5, "carbs_g": 10, "meal_type": "snack"}
+        for i in range(11)
+    ]
+    result = execute_tool(test_user, "log_food_batch", {"items": items})
+    assert "error" in result
+
+    assert "error" in execute_tool(test_user, "log_food_batch", {"items": []})
+    assert "error" in execute_tool(test_user, "log_food_batch", {})
+
+
+def test_log_food_batch_all_invalid(test_user):
+    """Все позиции невалидны — ошибка, ничего не записано."""
+    result = execute_tool(test_user, "log_food_batch", {
+        "items": [
+            {"product_name": "", "weight_g": 100, "calories": 100,
+             "protein_g": 5, "fat_g": 5, "carbs_g": 10, "meal_type": "snack"},
+        ],
+    })
+    assert "error" in result
+
+
+def test_log_workout_done_valid(test_user, db_conn):
+    """Выполненная тренировка создаёт запись в workout_sessions."""
+    result = execute_tool(test_user, "log_workout_done", {
+        "duration_min": 45,
+        "description": "Приседания и отжимания",
+        "exercises": ["приседания 3x12", "отжимания 3x15"],
+    })
+    assert result["ok"] is True
+    assert result["session_id"] > 0
+    assert "45 мин" in result["summary"]
+    assert "Приседания и отжимания" in result["summary"]
+
+    row = db_conn.execute(
+        "SELECT * FROM workout_sessions WHERE id = ?", (result["session_id"],)
+    ).fetchone()
+    assert row is not None
+    assert row["user_id"] == test_user
+    assert row["duration_min"] == 45
+    assert row["type"] == "strength"
+    assert "приседания" in row["notes"]
+
+
+def test_log_workout_done_cardio_synonym(test_user):
+    result = execute_tool(test_user, "log_workout_done", {
+        "duration_min": 30, "description": "Пробежка 5 км", "workout_type": "бег",
+    })
+    assert result["ok"] is True
+    assert result["workout_type"] == "cardio"
+
+
+def test_log_workout_done_validation(test_user):
+    """duration_min строго 1..600, description обязателен."""
+    assert "error" in execute_tool(test_user, "log_workout_done", {
+        "duration_min": 0, "description": "Тренировка"})
+    assert "error" in execute_tool(test_user, "log_workout_done", {
+        "duration_min": 601, "description": "Тренировка"})
+    assert "error" in execute_tool(test_user, "log_workout_done", {
+        "duration_min": "abc", "description": "Тренировка"})
+    assert "error" in execute_tool(test_user, "log_workout_done", {
+        "duration_min": 45, "description": ""})
+    assert "error" in execute_tool(test_user, "log_workout_done", {
+        "duration_min": 45, "description": "Тренировка", "workout_type": "custom"})
+
+
+def test_voice_day_flow_mock(test_user, monkeypatch):
+    """Голос «за день»: транскрипт → chat_with_tools → log_food_batch (мок API).
+
+    Имитирует ответ Gemini: раунд 1 — functionCall log_food_batch со всеми
+    блюдами из транскрипта, раунд 2 — текстовое подтверждение. Сеть не нужна.
+    """
+    import asyncio
+    from core.ai.gemini_client import GeminiClient
+
+    client = GeminiClient(api_key="test-key")
+
+    batch_items = [
+        {"product_name": "Омлет из двух яиц", "weight_g": 150, "calories": 210,
+         "protein_g": 13, "fat_g": 15, "carbs_g": 2, "meal_type": "breakfast"},
+        {"product_name": "Гречка с курицей", "weight_g": 300, "calories": 480,
+         "protein_g": 35, "fat_g": 12, "carbs_g": 55, "meal_type": "lunch"},
+        {"product_name": "Творог", "weight_g": 200, "calories": 240,
+         "protein_g": 34, "fat_g": 10, "carbs_g": 6, "meal_type": "dinner"},
+    ]
+    responses = iter([
+        {"candidates": [{"content": {"parts": [
+            {"functionCall": {"name": "log_food_batch", "args": {"items": batch_items}}},
+        ]}}]},
+        {"candidates": [{"content": {"parts": [
+            {"text": "Всё записал за день — отличная работа!"},
+        ]}}]},
+    ])
+
+    async def fake_generate(contents, tool_declarations, system_instruction=None):
+        return next(responses)
+
+    monkeypatch.setattr(client, "_generate_with_tools", fake_generate)
+
+    question = ("[Голосовое сообщение, расшифровка]: на завтрак омлет из двух яиц, "
+                "на обед гречка с курицей 300 грамм, вечером творог")
+    result = asyncio.run(client.chat_with_tools(user_id=test_user, question=question))
+
+    assert result is not None
+    assert "Всё записал" in result["text"]
+    assert any(u["tool"] == "log_food_batch" for u in result["tools_used"])
+    batch_summary = next(u["summary"] for u in result["tools_used"]
+                         if u["tool"] == "log_food_batch")
+    assert "3 приёмов пищи" in batch_summary
+    assert "930" in batch_summary
+
+    summary = get_today_summary(test_user)
+    assert summary["total_calories"] >= 930
 
 
 def test_food_intent_markers():
