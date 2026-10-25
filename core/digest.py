@@ -148,10 +148,26 @@ def _collect_yesterday_context(user_id: int, user: Dict) -> Dict[str, Any]:
     except Exception as e:
         logger.warning(f"Дайджест: не удалось получить метрики здоровья ({user_id}): {e}")
 
+    ctx["load_line"] = None
+    try:
+        from .load import get_current_freshness
+
+        load = get_current_freshness(user_id)
+        if load["history_days"] >= 28:
+            ctx["load_line"] = (
+                f"📈 Форма: {load['fitness']:g}, усталость: {load['fatigue']:g} — "
+                f"{load['interpretation']}"
+            )
+    except Exception as e:
+        logger.warning(f"Дайджест: не удалось получить форму и усталость ({user_id}): {e}")
+
     return ctx
 
 
-def _adaptation_rules(ctx: Dict[str, Any], cal_goal: float, prot: float, goal: str) -> Dict[str, Any]:
+def _adaptation_rules(
+        ctx: Dict[str, Any], cal_goal: float, prot: float, goal: str,
+        user_id: Optional[int] = None,
+) -> Dict[str, Any]:
     """Правила адаптации дня на основе вчерашних данных (без AI, дёшево)."""
     rules: Dict[str, Any] = {
         "protein_deficit": False,
@@ -169,9 +185,15 @@ def _adaptation_rules(ctx: Dict[str, Any], cal_goal: float, prot: float, goal: s
         if prot > 0 and ctx["protein_g"] < 0.9 * prot:
             rules["protein_deficit"] = True
             deficit = round(prot - ctx["protein_g"])
+            if user_id is not None:
+                from .preferences import protein_examples
+
+                examples = protein_examples(user_id)
+            else:
+                examples = "яйца, творог, курица, рыба"
             rules["nutrition_focus"] = (
                 f"Вчера белка не хватило ~{deficit} г. Сегодня добавь белковый продукт "
-                f"в каждый приём пищи (яйца, творог, курица, рыба)."
+                f"в каждый приём пищи ({examples})."
             )
             rules["micro_goal"] = f"Набрать не меньше {round(prot)} г белка."
         elif cal_goal > 0 and ctx["calories"] > 1.15 * cal_goal and goal == "lose":
@@ -274,7 +296,10 @@ async def generate_digest_text(user_id: int) -> str:
     ctx = await loop.run_in_executor(None, _collect_yesterday_context, user_id, user)
 
     # Правила адаптации (fallback-формулировки, работают и без AI)
-    rules = _adaptation_rules(ctx, cal_goal, prot, user.get("goal", "maintain"))
+    from .preferences import get_preferences
+
+    food_prefs = get_preferences(user_id)
+    rules = _adaptation_rules(ctx, cal_goal, prot, user.get("goal", "maintain"), user_id=user_id)
 
     # Цель текстом
     goal_text = {
@@ -329,6 +354,8 @@ async def generate_digest_text(user_id: int) -> str:
 
     if ctx.get("health_line"):
         yesterday_lines.append(ctx["health_line"])
+    if ctx.get("load_line"):
+        yesterday_lines.append(ctx["load_line"])
 
     if ctx.get("checkin_status"):
         checkin_text = {
@@ -358,6 +385,9 @@ async def generate_digest_text(user_id: int) -> str:
                     "protein_target": prot,
                     "fat_target": fats,
                     "carbs_target": carbs,
+                    "allergies": user.get("allergies") or "",
+                    "exclusions": food_prefs.get("food_exclusions") or "",
+                    "food_notes": food_prefs.get("food_notes") or "",
                 },
                 today_plan={
                     "workout": workout_text,

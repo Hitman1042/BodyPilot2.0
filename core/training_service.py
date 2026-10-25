@@ -146,6 +146,19 @@ def generate_daily_workout_plan(user_id: int, target_date: date = None,
 
     conn = get_db()
 
+    from .safety import MEDICAL_DISCLAIMER, get_safety_rules, filter_exercises
+
+    safety_rules = get_safety_rules(user_id)
+    condition_names = safety_rules["condition_names"]
+    safety_note = "щадящий режим: " + ", ".join(condition_names) if condition_names else ""
+    adaptation = dict(adaptation)
+    adaptation["load_multiplier"] = round(
+        float(adaptation.get("load_multiplier", 1.0)) * safety_rules["load_cap"], 4
+    )
+    adaptation_notes = [text for text in (adaptation.get("note"), safety_note) if text]
+    adaptation["note"] = "; ".join(adaptation_notes)
+    disclaimer = MEDICAL_DISCLAIMER if condition_names and force_refresh else None
+
     # Предпочтения пользователя (место/инвентарь/длительность)
     from .preferences import get_preferences, is_bodyweight_only, BODYWEIGHT_EQUIPMENT
 
@@ -153,20 +166,29 @@ def generate_daily_workout_plan(user_id: int, target_date: date = None,
     allowed_eq = BODYWEIGHT_EQUIPMENT if is_bodyweight_only(prefs) else None
 
     def pick_category(category: str, limit: int = 10) -> List[Dict]:
-        items = get_exercises_by_category(category, limit=limit, allowed_equipment=allowed_eq)
+        items = filter_exercises(
+            get_exercises_by_category(category, allowed_equipment=allowed_eq), safety_rules
+        )
         if not items and allowed_eq is not None:
-            # Фолбэк: без фильтра, чтобы план не остался пустым
-            items = get_exercises_by_category(category, limit=limit)
-        return items
+            # Инвентарный фолбэк не отменяет медицинские ограничения.
+            items = filter_exercises(get_exercises_by_category(category), safety_rules)
+        return items[:limit]
 
     def pick_muscle(mg: str, category: str) -> List[Dict]:
-        items = get_exercises_by_muscle(mg, category=category, allowed_equipment=allowed_eq)
+        items = filter_exercises(
+            get_exercises_by_muscle(mg, category=category, allowed_equipment=allowed_eq),
+            safety_rules,
+        )
         if not items and allowed_eq is not None:
             # Та же группа мышц из другого модуля, но всё ещё без инвентаря
-            items = get_exercises_by_muscle(mg, allowed_equipment=allowed_eq)
+            items = filter_exercises(
+                get_exercises_by_muscle(mg, allowed_equipment=allowed_eq), safety_rules
+            )
         if not items and allowed_eq is not None:
             # Последний фолбэк: без фильтра, чтобы план не остался пустым
-            items = get_exercises_by_muscle(mg, category=category)
+            items = filter_exercises(
+                get_exercises_by_muscle(mg, category=category), safety_rules
+            )
         return items
 
     # Длительность тренировки масштабирует объём (база ~60 мин)
@@ -195,8 +217,11 @@ def generate_daily_workout_plan(user_id: int, target_date: date = None,
                    WHERE pe.plan_id = ? ORDER BY pe.sort_order""",
                 (plan_id,)
             ).fetchall()
-            return {"plan_id": plan_id, "date": target_date.isoformat(),
-                    "exercises": [dict(e) for e in exercises], "adaptation": adaptation}
+            return {
+                "plan_id": plan_id, "date": target_date.isoformat(),
+                "exercises": [dict(e) for e in exercises], "adaptation": adaptation,
+                "note": safety_note,
+            }
 
     # Получаем профиль пользователя
     user = conn.execute("SELECT goal, activity FROM users WHERE user_id = ?", (user_id,)).fetchone()
@@ -347,6 +372,22 @@ def generate_daily_workout_plan(user_id: int, target_date: date = None,
         })
         sort_order += 1
 
+    if not plan_exercises and condition_names:
+        from .safety import get_safe_fallback_exercises
+
+        alternatives = get_safe_fallback_exercises(
+            safety_rules, allowed_equipment=allowed_eq, limit=3
+        )
+        for ex in alternatives:
+            plan_exercises.append({
+                "exercise_id": ex["id"], "name": ex["name"],
+                "muscle_group": ex["muscle_group"], "category": "warmup",
+                "sets": 1, "reps_min": 5, "reps_max": 10,
+                "duration_min": 3, "weight_kg": None, "rest_sec": 60,
+                "sort_order": sort_order,
+            })
+            sort_order += 1
+
     # СОХРАНЕНИЕ В БД
     conn.execute("DELETE FROM daily_workout_plans WHERE user_id = ? AND date = ?", (user_id, target_date.isoformat()))
     conn.execute("INSERT INTO daily_workout_plans (user_id, date, is_active) VALUES (?, ?, 1)",
@@ -363,8 +404,11 @@ def generate_daily_workout_plan(user_id: int, target_date: date = None,
 
     conn.commit()
 
-    return {"plan_id": plan_id, "date": target_date.isoformat(), "exercises": plan_exercises,
-            "modules": _group_by_modules(plan_exercises), "adaptation": adaptation}
+    return {
+        "plan_id": plan_id, "date": target_date.isoformat(), "exercises": plan_exercises,
+        "modules": _group_by_modules(plan_exercises), "adaptation": adaptation,
+        "note": safety_note, "disclaimer": disclaimer,
+    }
 
 
 # ── Опрос самочувствия и адаптация нагрузки ──────────────────────────────

@@ -102,13 +102,37 @@ def build_user_context(user_id: int) -> Optional[str]:
     except Exception:
         pass
 
+    # ── Здоровье и ограничения тренировок ──────────────────────
+    try:
+        from core.safety import get_safety_rules
+
+        safety_rules = get_safety_rules(user_id)
+        condition_names = safety_rules.get("condition_names") or []
+        if condition_names:
+            details = list(condition_names)
+            if user.get("age"):
+                details.append(f"возраст: {user['age']} лет")
+            lines.append("- Здоровье/ограничения: " + "; ".join(details))
+    except Exception:
+        pass
+
     # ── Предпочтения тренировок и питания ──────────────────────
     try:
         from core.preferences import get_preferences, describe_preferences
 
-        prefs_text = describe_preferences(get_preferences(user_id))
+        prefs = get_preferences(user_id)
+        prefs_text = describe_preferences(prefs)
         if prefs_text:
             lines.append(f"- Предпочтения: {prefs_text}")
+        exclusions = (prefs.get("food_exclusions") or "").strip()
+        food_notes = (prefs.get("food_notes") or "").strip()
+        if exclusions or food_notes:
+            details = []
+            if exclusions:
+                details.append(f"исключённые продукты: {exclusions}")
+            if food_notes:
+                details.append(f"особенности питания: {food_notes}")
+            lines.append("- Исключения из еды: " + "; ".join(details))
     except Exception:
         pass
 
@@ -186,6 +210,20 @@ def build_user_context(user_id: int) -> Optional[str]:
         if summary.get("steps_yesterday") is not None:
             steps = f"{int(round(summary['steps_yesterday'])):,}".replace(",", " ")
             lines.append(f"- Шаги вчера: {steps}")
+    except Exception:
+        pass
+
+    # ── Форма и усталость (только контекст, не правила плана) ───
+    try:
+        from core.load import get_current_freshness
+
+        load = get_current_freshness(user_id)
+        if load["history_days"]:
+            lines.append(
+                f"- Форма и усталость: Fitness {load['fitness']:g}, "
+                f"Fatigue {load['fatigue']:g}, Freshness {load['freshness']:g} "
+                f"({load['interpretation']})"
+            )
     except Exception:
         pass
 

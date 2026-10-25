@@ -95,6 +95,82 @@ def is_bodyweight_only(prefs: Dict[str, Any]) -> bool:
     return any(marker in equipment for marker in NO_EQUIPMENT_MARKERS)
 
 
+_PROTEIN_CANDIDATES = (
+    ("курица", ("куриц", "курин", "chicken"), "meat"),
+    ("рыба", ("рыб", "fish"), "fish"),
+    ("яйца", ("яйц", "яич", "egg"), "eggs"),
+    ("творог", ("творог", "творож", "cottage cheese"), "dairy"),
+    ("бобовые", ("бобов", "фасол", "чечевиц", "нут", "beans", "lentils"), "plant"),
+    ("тофу", ("тофу", "tofu"), "plant"),
+    ("протеин", ("протеин", "protein"), "protein"),
+    ("орехи", ("орех", "арахис", "nuts", "peanut"), "nuts"),
+)
+
+_ANIMAL_MARKERS = {
+    "meat": ("куриц", "курин", "мяс", "говядин", "свинин", "индейк", "chicken", "meat", "beef", "pork"),
+    "fish": ("рыб", "лосос", "семг", "сёмг", "тунц", "fish", "salmon", "tuna"),
+    "eggs": ("яйц", "яич", "омлет", "egg"),
+    "dairy": ("творог", "творож", "молок", "молоч", "сыр", "йогурт", "кефир", "dairy", "milk", "cheese", "yogurt"),
+}
+
+
+def _is_vegan(text: str) -> bool:
+    return "веган" in text or "vegan" in text
+
+
+def _is_vegetarian(text: str) -> bool:
+    return "вегетариан" in text or "vegetarian" in text
+
+
+def is_food_excluded(name: str, *restriction_texts: str) -> bool:
+    """Проверить название продукта/блюда по ограничениям свободным текстом."""
+    food = (name or "").lower()
+    restrictions = " ".join(str(text or "") for text in restriction_texts).lower()
+    if not food or not restrictions.strip():
+        return False
+
+    for part in restrictions.replace(";", ",").replace("\n", ",").split(","):
+        part = part.strip()
+        if part and (part in food or food in part):
+            return True
+
+    vegan = _is_vegan(restrictions)
+    vegetarian = _is_vegetarian(restrictions)
+    for group, markers in _ANIMAL_MARKERS.items():
+        if not any(marker in food for marker in markers):
+            continue
+        if vegan or (vegetarian and group in ("meat", "fish")):
+            return True
+        if any(marker in restrictions for marker in markers):
+            return True
+
+    nut_markers = ("орех", "арахис", "nuts", "peanut")
+    if any(marker in food for marker in nut_markers) and any(
+            marker in restrictions for marker in nut_markers
+    ):
+        return True
+    return False
+
+
+def protein_examples(user_id: int) -> str:
+    """Примеры источников белка с учётом аллергий и пищевых исключений."""
+    from .database import get_user
+
+    user = get_user(user_id) or {}
+    prefs = get_preferences(user_id)
+    restrictions = (
+        str(user.get("allergies") or ""),
+        str(prefs.get("food_exclusions") or ""),
+        str(prefs.get("food_notes") or ""),
+    )
+    allowed = [
+        name for name, markers, _group in _PROTEIN_CANDIDATES
+        if not is_food_excluded(name, *restrictions)
+        and not any(any(marker in text.lower() for marker in markers) for text in restrictions)
+    ]
+    return ", ".join(allowed) if allowed else "бобовые и протеин"
+
+
 def describe_preferences(prefs: Dict[str, Any]) -> Optional[str]:
     """Короткая строка предпочтений для контекста коуча/сообщений (или None)."""
     parts = []

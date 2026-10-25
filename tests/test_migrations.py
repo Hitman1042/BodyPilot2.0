@@ -27,6 +27,9 @@ EXPECTED_TABLES = {
     "reminder_log",
     "progress_photos",
     "user_preferences",
+    "health_conditions",
+    "user_health_conditions",
+    "kudos",
 }
 
 
@@ -72,3 +75,5 @@ def test_seed_data(tmp_path):
     assert templates > 0, "Шаблоны ИИ-вопросов не засеяны"
     sports = conn.execute("SELECT COUNT(*) FROM sports").fetchone()[0]
     assert sports == 10
+    conditions = conn.execute("SELECT COUNT(*) FROM health_conditions").fetchone()[0]
+    assert conditions == 15

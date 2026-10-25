@@ -12,6 +12,7 @@ from typing import Dict, List, Optional
 from core.database import get_db, get_user
 from core.nutrition_calc import get_nutrition_plan
 from core.nutrition_tracker import get_today_summary
+from core.preferences import get_preferences, is_food_excluded
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +61,7 @@ def rule_based_suggestions(
         remaining: Dict,
         exclude: Optional[List[str]] = None,
         limit: int = 3,
+        user_id: Optional[int] = None,
 ) -> List[Dict]:
     """Подбор блюд из локальной БД food_products под остаток калорий/белка.
 
@@ -71,6 +73,15 @@ def rule_based_suggestions(
         return []
 
     excluded = {n.strip().lower() for n in (exclude or []) if n}
+    restrictions = ()
+    if user_id is not None:
+        user = get_user(user_id) or {}
+        prefs = get_preferences(user_id)
+        restrictions = (
+            str(user.get("allergies") or ""),
+            str(prefs.get("food_exclusions") or ""),
+            str(prefs.get("food_notes") or ""),
+        )
 
     rows = get_db().execute(
         """SELECT name, calories_100g, protein_100g, fat_100g, carbs_100g, serving_size_g
@@ -85,7 +96,10 @@ def rule_based_suggestions(
 
     for row in rows:
         name = (row["name"] or "").strip()
-        if not name or name.lower() in excluded:
+        if (
+                not name or name.lower() in excluded
+                or is_food_excluded(name, *restrictions)
+        ):
             continue
 
         cal_100g = float(row["calories_100g"] or 0)
@@ -157,6 +171,10 @@ async def ai_suggestions(
         return None
 
     allergies = (user.get("allergies") or "").strip() or "нет"
+    prefs = get_preferences(user_id)
+    exclusions = (prefs.get("food_exclusions") or "").strip() or "нет"
+    food_notes = (prefs.get("food_notes") or "").strip() or "нет"
+    restrictions = (allergies, exclusions, food_notes)
     goal = GOAL_NAMES.get(user.get("goal"), user.get("goal") or "не указана")
     exclude_text = ""
     if exclude:
@@ -173,11 +191,14 @@ async def ai_suggestions(
 
 ЦЕЛЬ ПОЛЬЗОВАТЕЛЯ: {goal}
 АЛЛЕРГИИ/ОГРАНИЧЕНИЯ: {allergies}
+ИСКЛЮЧЁННЫЕ ПРОДУКТЫ: {exclusions}
+ОСОБЕННОСТИ ПИТАНИЯ: {food_notes}
 {exclude_text}
 
 ЗАДАЧА: предложи 3 конкретных реальных блюда (не продукты по одному, а блюда/сочетания),
 каждое из которых вписывается в остаток калорий одного приёма пищи.
-Учитывай аллергии и цель. КБЖУ укажи на ВСЮ предложенную порцию.
+Никогда не используй аллергены, исключённые продукты и ингредиенты, не подходящие под особенности питания.
+Учитывай цель. КБЖУ укажи на ВСЮ предложенную порцию.
 
 ВЕРНИ ТОЛЬКО JSON:
 {{
@@ -211,7 +232,7 @@ async def ai_suggestions(
     meals = []
     for raw in raw_meals:
         meal = _normalize_ai_meal(raw)
-        if meal:
+        if meal and not is_food_excluded(meal["name"], *restrictions):
             meals.append(meal)
         if len(meals) >= 3:
             break
@@ -240,5 +261,5 @@ async def suggest_meals(
         if meals:
             return {"remaining": remaining, "suggestions": meals, "source": "ai"}
 
-    meals = rule_based_suggestions(remaining, exclude=exclude)
+    meals = rule_based_suggestions(remaining, exclude=exclude, user_id=user_id)
     return {"remaining": remaining, "suggestions": meals, "source": "rules"}

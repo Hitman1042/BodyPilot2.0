@@ -428,6 +428,21 @@ button { font-family: inherit; }
     font-size: 0.82rem;
 }
 
+/* ── Друзья ────────────────────────────────────────── */
+.social-event {
+    padding: 10px 0;
+    border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+    line-height: 1.4;
+}
+.social-event:last-child { border-bottom: none; }
+.social-event-footer {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 10px;
+    margin-top: 7px;
+}
+
 /* ── Фото прогресса ────────────────────────────────── */
 .photo-dynamics { margin-bottom: 8px; }
 .photo-grid {
@@ -553,3 +568,137 @@ button { font-family: inherit; }
 }
 .toast-enter-active, .toast-leave-active { transition: opacity 0.25s, transform 0.25s; }
 .toast-enter-from, .toast-leave-to { opacity: 0; transform: translateX(-50%) translateY(8px); }
+
+/* ── Календарь и аналитика ─────────────────────────── */
+.calendar-switch { margin: 0 0 10px; }
+.calendar-weekdays, .activity-calendar {
+    display: grid;
+    grid-template-columns: repeat(7, minmax(0, 1fr));
+    gap: 4px;
+}
+.calendar-weekdays {
+    color: var(--hint);
+    font-size: 0.7rem;
+    text-align: center;
+    margin-bottom: 4px;
+}
+.activity-calendar { transition: opacity 0.15s; }
+.activity-calendar.loading { opacity: 0.45; }
+.calendar-cell {
+    min-width: 0;
+    min-height: 48px;
+    padding: 4px 2px;
+    border: 1px solid rgba(148, 163, 184, 0.14);
+    border-radius: 8px;
+    text-align: center;
+}
+.calendar-cell.empty { visibility: hidden; }
+.calendar-cell.today { border: 2px solid var(--accent); padding: 3px 1px; }
+.calendar-day { display: block; font-size: 0.75rem; line-height: 1.1; }
+.calendar-icons {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    line-height: 1.05;
+    margin-top: 4px;
+}
+.calendar-icons i { font-style: normal; font-size: 0.67rem; }
+.calendar-legend {
+    color: var(--hint);
+    font-size: 0.7rem;
+    text-align: center;
+    margin-top: 10px;
+}
+.record-summary { margin-top: 8px; }
+.freshness-line { margin-bottom: 8px; line-height: 1.45; }
+@media (max-width: 360px) {
+    .calendar-weekdays, .activity-calendar { gap: 2px; }
+    .calendar-cell { min-height: 44px; }
+    .calendar-icons i { font-size: 0.6rem; }
+}
+
+/* ── Онбординг ───────────────────────────────────── */
+.onboarding-screen {
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 24px 16px;
+    text-align: center;
+}
+.onboarding-screen h1 { margin: 0 0 8px; }
+.onboarding-screen > .btn { max-width: 360px; }
+.onboarding-progress { margin: 0 0 12px; }
+.onboarding-card { width: 100%; max-width: 420px; text-align: left; }
+.onboarding-card h2 { margin: 4px 0 14px; font-size: 1.25rem; }
+.onboarding-actions { margin-top: 18px; }
+.onboarding-loading { width: 100%; max-width: 420px; }
+.choice-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.choice-list { display: flex; flex-direction: column; gap: 10px; }
+.choice.selected {
+    background: var(--accent);
+    color: var(--accent-text);
+    border-color: var(--accent);
+}
+
+/* ── Голосовой ввод ──────────────────────────────── */
+.voice-btn { flex: 0 0 auto; padding: 9px 12px; }
+.voice-recorder {
+    position: fixed;
+    bottom: calc(62px + env(safe-area-inset-bottom));
+    left: 0;
+    right: 0;
+    max-width: 480px;
+    margin: 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 16px;
+    background: var(--bg);
+    z-index: 25;
+}
+.voice-recorder b { flex: 1; }
+.voice-indicator { color: var(--danger); animation: voice-pulse 1s infinite; }
+@keyframes voice-pulse { 50% { opacity: 0.35; } }
+
+/* ── Загрузка фото и админка ─────────────────────── */
+.card-title-action {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+}
+.photo-file-input { padding: 9px; }
+.photo-upload-preview {
+    display: block;
+    width: 100%;
+    max-height: 320px;
+    object-fit: contain;
+    border-radius: 12px;
+    margin: 8px 0;
+    background: rgba(148, 163, 184, 0.12);
+}
+.admin-sheet { max-height: 90vh; }
+.admin-key-row .input { flex: 1; min-width: 0; }
+.admin-key-row .btn { flex: 0 0 auto; }
+.admin-metrics {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+    margin: 14px 0;
+}
+.admin-metrics > div {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    background: var(--bg-secondary);
+    border-radius: 12px;
+    padding: 12px;
+}
+.admin-metrics b { font-size: 1.25rem; }
+.admin-metrics span { color: var(--hint); font-size: 0.78rem; }
+.admin-grant { border-top: 1px solid rgba(148, 163, 184, 0.15); padding-top: 12px; }
+@media (max-width: 360px) {
+    .card-title-action { align-items: flex-start; flex-direction: column; }
+}

@@ -134,6 +134,10 @@ async def main() -> None:
     dp.include_router(stats_router)
     logger.info("  ✓ stats_router")
 
+    from bot.handlers.records import router as records_router
+    dp.include_router(records_router)
+    logger.info("  ✓ records_router")
+
     from bot.handlers.digest_handlers import router as digest_router
     dp.include_router(digest_router)
     logger.info("  ✓ digest_router")
@@ -146,6 +150,12 @@ async def main() -> None:
     dp.include_router(menu_router)
     logger.info("  ✓ menu_router")
 
+    # Удаление/отмена записей еды текстом — РАНЬШЕ FSM-роутеров,
+    # чтобы «удали курицу» не попадало в поля ввода (граммы, вес и т.п.)
+    from bot.handlers.delete_flow import router as delete_flow_router
+    dp.include_router(delete_flow_router)
+    logger.info("  ✓ delete_flow_router")
+
     from bot.handlers.premium import router as premium_router
     dp.include_router(premium_router)
     logger.info("  ✓ premium_router")
@@ -153,6 +163,10 @@ async def main() -> None:
     from bot.handlers.plans import router as plans_router
     dp.include_router(plans_router)
     logger.info("  ✓ plans_router")
+
+    from bot.handlers.social import router as social_router
+    dp.include_router(social_router)
+    logger.info("  ✓ social_router")
 
     from bot.handlers.admin import router as admin_router
     dp.include_router(admin_router)

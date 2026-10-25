@@ -10,6 +10,7 @@ from aiogram import Bot
 from aiogram.types import BufferedInputFile
 
 from .charts import (
+    chart_fitness,
     chart_sleep,
     chart_steps,
     generate_calories_chart,
@@ -173,6 +174,14 @@ def _collect_metrics(user_id: int) -> Optional[Dict[str, Any]]:
     except Exception as exc:
         logger.warning("Недельный отчёт: метрики здоровья недоступны (%s): %s", user_id, exc)
 
+    freshness = None
+    try:
+        from .load import get_current_freshness
+
+        freshness = get_current_freshness(user_id)
+    except Exception as exc:
+        logger.warning("Недельный отчёт: нагрузка недоступна (%s): %s", user_id, exc)
+
     return {
         "start_date": first_day.isoformat(),
         "end_date": today.isoformat(),
@@ -199,6 +208,7 @@ def _collect_metrics(user_id: int) -> Optional[Dict[str, Any]]:
         ),
         "is_active": bool(nutrition or workout_count),
         "health": health,
+        "freshness": freshness,
     }
 
 
@@ -287,6 +297,15 @@ def _format_report_text(metrics: Dict[str, Any]) -> str:
     if metrics.get("health"):
         lines.extend(_format_health_block(metrics["health"]))
 
+    freshness = metrics.get("freshness")
+    if freshness:
+        lines.extend([
+            "",
+            "📈 <b>Форма и усталость</b>",
+            f"• Fitness: {freshness['fitness']:g}; Fatigue: {freshness['fatigue']:g}",
+            f"• Freshness: {freshness['freshness']:g} — {freshness['interpretation']}",
+        ])
+
     lines.extend([
         "",
         f"🔥 <b>Текущая серия:</b> {metrics['streak_current']} "
@@ -303,6 +322,7 @@ def _build_charts(user_id: int) -> list[Dict[str, Any]]:
         ("workouts", "workouts_7d.png", "Тренировки за 7 дней", generate_workouts_chart),
         ("steps", "steps_14d.png", "Шаги за 14 дней", chart_steps),
         ("sleep", "sleep_14d.png", "Сон за 14 дней", chart_sleep),
+        ("fitness", "fitness_8w.png", "Форма и усталость за 8 недель", chart_fitness),
     )
     charts = []
     for name, filename, caption, generator in specs:

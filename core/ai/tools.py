@@ -144,6 +144,92 @@ TOOL_DECLARATIONS = [
         },
     },
     {
+        "name": "delete_food_entry",
+        "description": (
+            "Удалить запись еды из дневника пользователя. "
+            "Вызывай при «удали», «отмени», «не то записал», «убери из дневника». "
+            "Если product_name не указан — удаляет ПОСЛЕДНЮЮ запись за сегодня. "
+            "НИКОГДА не говори «удалил/отменено» без вызова этого инструмента."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "product_name": {
+                    "type": "string",
+                    "description": "Название продукта/блюда (или его часть) для поиска за сегодня; пусто = последняя запись",
+                },
+            },
+        },
+    },
+    {
+        "name": "delete_workout_session",
+        "description": (
+            "Удалить последнюю тренировку пользователя (или за указанную дату). "
+            "Вызывай при «удали тренировку», «отмени тренировку», "
+            "«тренировка записана неправильно»."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "date": {
+                    "type": "string",
+                    "description": "Дата сессии: 'yesterday' или 'YYYY-MM-DD'; пусто = последняя",
+                },
+            },
+        },
+    },
+    {
+        "name": "delete_health_metric",
+        "description": (
+            "Удалить ручную метрику здоровья за день (сон, шаги, пульс покоя, вес-метрику). "
+            "Вызывай при «удали сон», «удали шаги за вчера», «обнули шаги»."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "metric_type": {
+                    "type": "string",
+                    "enum": ["steps", "sleep_hours", "resting_heart_rate", "weight"],
+                    "description": "Тип метрики для удаления",
+                },
+                "date": {
+                    "type": "string",
+                    "description": "Дата: 'yesterday' или 'YYYY-MM-DD'; пусто = сегодня",
+                },
+            },
+            "required": ["metric_type"],
+        },
+    },
+    {
+        "name": "log_water",
+        "description": "Записать выпитую воду в миллилитрах (например «выпил 2 стакана воды» → 500).",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "amount_ml": {
+                    "type": "integer",
+                    "description": "Количество воды в мл (1-5000)",
+                },
+            },
+            "required": ["amount_ml"],
+        },
+    },
+    {
+        "name": "join_challenge",
+        "description": "Вступить в челлендж: food_30 (30 дней дневника), workout_12 (12 тренировок за 30 дней), calorie_week (7 дней в норме калорий).",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "code": {
+                    "type": "string",
+                    "enum": ["food_30", "workout_12", "calorie_week"],
+                    "description": "Код челленджа",
+                },
+            },
+            "required": ["code"],
+        },
+    },
+    {
         "name": "get_today_nutrition",
         "description": (
             "Получить сводку питания за сегодня (съедено калорий/БЖУ, "
@@ -181,6 +267,29 @@ TOOL_DECLARATIONS = [
                 },
             },
             "required": ["weight_kg"],
+        },
+    },
+    {
+        "name": "log_health_metric",
+        "description": (
+            "Записать или обновить метрику здоровья: шаги, сон, пульс покоя или вес-метрику. "
+            "Для «вчера» передай date='yesterday', для другой даты — YYYY-MM-DD. "
+            "Для текущего веса профиля используй log_weight."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "metric_type": {
+                    "type": "string",
+                    "enum": ["steps", "sleep_hours", "resting_heart_rate", "weight"],
+                },
+                "value": {"type": "number"},
+                "date": {
+                    "type": "string",
+                    "description": "Необязательно: yesterday или YYYY-MM-DD",
+                },
+            },
+            "required": ["metric_type", "value"],
         },
     },
     {
@@ -296,6 +405,32 @@ TOOL_DECLARATIONS = [
         "parameters": {"type": "object", "properties": {}},
     },
     {
+        "name": "set_health_condition",
+        "description": (
+            "Сохранить или снять ограничение здоровья и СРАЗУ перегенерировать "
+            "план тренировки с безопасными упражнениями. Вызывай при сообщениях "
+            "о боли/травме, хроническом заболевании, беременности или возрасте 60+."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "condition_code": {
+                    "type": "string",
+                    "description": "Код из справочника health_conditions, например knee_pain",
+                },
+                "severity": {
+                    "type": "integer",
+                    "description": "Тяжесть по оценке пользователя: 1-3",
+                },
+                "active": {
+                    "type": "boolean",
+                    "description": "true — учитывать ограничение, false — снять его",
+                },
+            },
+            "required": ["condition_code"],
+        },
+    },
+    {
         "name": "set_food_preferences",
         "description": (
             "Сохранить пищевые предпочтения пользователя (нелюбимые продукты, "
@@ -340,7 +475,7 @@ MEAL_NAMES_RU = {
     "snack": "перекус",
 }
 
-UPDATE_PROFILE_FIELDS = {"goal", "activity", "weight_kg", "height_cm", "age"}
+UPDATE_PROFILE_FIELDS = {"goal", "activity", "weight_kg", "height_cm", "age", "allergies", "city", "preferred_time", "timezone_offset", "sport"}
 GOAL_VALUES = {"lose", "maintain", "gain"}
 ACTIVITY_VALUES = {"sedentary", "moderate", "high"}
 
@@ -643,6 +778,73 @@ def _tool_log_weight(user_id: int, args: Dict) -> Dict:
     }
 
 
+HEALTH_METRIC_RULES = {
+    "steps": (1, 100000, "шаги"),
+    "sleep_hours": (0.5, 24, "сон"),
+    "resting_heart_rate": (30, 220, "пульс покоя"),
+    "weight": (20, 400, "вес"),
+}
+
+
+def _tool_log_health_metric(user_id: int, args: Dict) -> Dict:
+    from datetime import date, datetime, timedelta, timezone
+
+    from core.database import get_user
+    from core.health_data import _local_today, local_noon_utc, replace_manual_metric
+
+    metric_type = str(args.get("metric_type") or "").strip().lower()
+    if metric_type not in HEALTH_METRIC_RULES:
+        return {"error": "metric_type должен быть steps/sleep_hours/resting_heart_rate/weight"}
+
+    minimum, maximum, label = HEALTH_METRIC_RULES[metric_type]
+    value = _to_float(args.get("value"))
+    if value is None or not (minimum <= value <= maximum):
+        return {"error": f"value для {metric_type} должен быть от {minimum:g} до {maximum:g}"}
+
+    user = get_user(user_id)
+    if not user:
+        return {"error": "пользователь не найден"}
+    offset = int(user.get("timezone_offset") or 0)
+    raw_date = args.get("date")
+    target_date = None
+    if raw_date is not None and str(raw_date).strip():
+        date_text = str(raw_date).strip().lower()
+        if date_text == "yesterday":
+            target_date = _local_today(offset) - timedelta(days=1)
+        else:
+            try:
+                target_date = date.fromisoformat(date_text)
+            except ValueError:
+                return {"error": "date должен быть yesterday или YYYY-MM-DD"}
+
+    ts = local_noon_utc(user_id, target_date) if target_date else datetime.now(timezone.utc)
+    replace_manual_metric(user_id, metric_type, value, source="chat", ts=ts)
+
+    if metric_type == "steps":
+        value_text = f"{int(round(value)):,}".replace(",", " ")
+    else:
+        value_text = f"{value:g}"
+    units = {"steps": "", "sleep_hours": " ч", "resting_heart_rate": " уд/мин", "weight": " кг"}
+    if target_date == _local_today(offset) - timedelta(days=1):
+        date_text = " за вчера"
+    elif target_date:
+        date_text = f" за {target_date.isoformat()}"
+    else:
+        date_text = ""
+    action = "Обновил" if target_date else "Записал"
+    summary = f"{action} {label}{date_text}: {value_text}{units[metric_type]}"
+
+    from core.ai.chat_history import append_event
+    append_event(user_id, f"[событие: {summary}]")
+    return {
+        "ok": True,
+        "metric_type": metric_type,
+        "value": value,
+        "date": target_date.isoformat() if target_date else None,
+        "summary": summary,
+    }
+
+
 def _tool_update_profile(user_id: int, args: Dict) -> Dict:
     from core.database import update_user
 
@@ -677,6 +879,30 @@ def _tool_update_profile(user_id: int, args: Dict) -> Dict:
         value = _to_float(raw_value)
         if value is None or not (100 <= value <= 250):
             return {"error": "height_cm должен быть от 100 до 250"}
+    elif field == "allergies":
+        value = str(raw_value).strip()[:300]
+    elif field == "city":
+        value = str(raw_value).strip()[:100]
+    elif field == "preferred_time":
+        import re
+        value = str(raw_value).strip()
+        if not re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", value):
+            return {"error": "preferred_time должен быть в формате HH:MM, например 07:00"}
+    elif field == "timezone_offset":
+        value = _to_int(raw_value)
+        if value is None or not (-720 <= value <= 840):
+            return {"error": "timezone_offset должен быть минутами от UTC, например 180 для UTC+3"}
+    elif field == "sport":
+        from core.sports.catalog import get_all_sports, set_user_sport
+        query = str(raw_value).strip().lower()
+        for sport in get_all_sports():
+            names = (str(sport.get("name_en", "")).lower(), str(sport.get("name_ru", "")).lower())
+            if query in names or any(query in n for n in names if n):
+                if set_user_sport(user_id, sport["id"]):
+                    return {"ok": True, "field": field, "value": sport["id"],
+                            "summary": f"Обновил спорт: {sport.get('name_ru') or sport.get('name_en')}"}
+                return {"error": "не удалось обновить спорт"}
+        return {"error": f"не знаю вид спорта «{raw_value}»"}
     else:  # age
         value = _to_int(raw_value)
         if value is None or not (10 <= value <= 100):
@@ -917,6 +1143,88 @@ def _tool_regenerate_workout_plan(user_id: int, args: Dict) -> Dict:
     }
 
 
+def _tool_set_health_condition(user_id: int, args: Dict) -> Dict:
+    from core.database import get_db
+    from core.safety import (
+        HEALTH_CONDITION_CODES_TEXT,
+        MEDICAL_DISCLAIMER,
+        get_condition,
+    )
+
+    condition_code = str(args.get("condition_code") or "").strip().lower()
+    condition = get_condition(condition_code)
+    if not condition:
+        return {"error": f"неизвестный condition_code; доступны: {HEALTH_CONDITION_CODES_TEXT}"}
+
+    severity = _to_int(args.get("severity", 1))
+    if severity is None or not (1 <= severity <= 3):
+        return {"error": "severity должен быть от 1 до 3"}
+
+    raw_active = args.get("active", True)
+    if isinstance(raw_active, str):
+        normalized = raw_active.strip().lower()
+        if normalized in ("true", "1", "yes"):
+            active = True
+        elif normalized in ("false", "0", "no"):
+            active = False
+        else:
+            return {"error": "active должен быть true/false"}
+    elif isinstance(raw_active, bool) or raw_active in (0, 1):
+        active = bool(raw_active)
+    else:
+        return {"error": "active должен быть true/false"}
+
+    conn = get_db()
+    previous = conn.execute(
+        """SELECT is_active FROM user_health_conditions
+           WHERE user_id = ? AND condition_code = ?""",
+        (user_id, condition_code),
+    ).fetchone()
+    show_disclaimer = active and (not previous or not previous["is_active"])
+    conn.execute(
+        """INSERT INTO user_health_conditions
+           (user_id, condition_code, severity, notes, is_active, updated_at)
+           VALUES (?, ?, ?, '', ?, datetime('now'))
+           ON CONFLICT(user_id, condition_code) DO UPDATE SET
+               severity = excluded.severity,
+               is_active = excluded.is_active,
+               updated_at = excluded.updated_at""",
+        (user_id, condition_code, severity, int(active)),
+    )
+    conn.commit()
+
+    from core.training_service import generate_daily_workout_plan
+
+    plan = generate_daily_workout_plan(user_id, force_refresh=True)
+    exercises_count = len(plan.get("exercises") or []) if plan else 0
+    name = condition["name_ru"]
+    if active:
+        if condition_code == "knee_pain":
+            effect = "без приседаний и выпадов"
+        else:
+            effect = "с учётом ограничений"
+        summary = f"Учту: {name.lower()} — план перестроен {effect}"
+    else:
+        summary = f"Ограничение «{name.lower()}» снято — план перестроен"
+    if show_disclaimer:
+        summary += f". {MEDICAL_DISCLAIMER}"
+
+    from core.ai.chat_history import append_event
+
+    append_event(user_id, f"[событие: {summary}]")
+    result = {
+        "ok": True,
+        "condition_code": condition_code,
+        "severity": severity,
+        "active": active,
+        "plan_exercises": exercises_count,
+        "summary": summary,
+    }
+    if show_disclaimer:
+        result["disclaimer"] = MEDICAL_DISCLAIMER
+    return result
+
+
 def _tool_set_food_preferences(user_id: int, args: Dict) -> Dict:
     from core.preferences import set_preferences
 
@@ -979,19 +1287,193 @@ def _tool_regenerate_meal_plan(user_id: int, args: Dict) -> Dict:
     }
 
 
+def _tool_delete_food_entry(user_id: int, args: Dict) -> Dict:
+    """Удалить запись еды: по названию (части) за сегодня или последнюю."""
+    from core.nutrition_tracker import delete_food_entry, get_food_log_today
+
+    product_name = str((args or {}).get("product_name") or "").strip().lower()
+    entries = get_food_log_today(user_id)  # свежие записи первыми
+    if not entries:
+        return {"error": "за сегодня нет записей еды — нечего удалять"}
+
+    target = None
+    if product_name:
+        for entry in entries:
+            if product_name in str(entry.get("product_name", "")).lower():
+                target = entry
+                break
+        if target is None:
+            return {
+                "error": (
+                    f"не нашёл «{product_name}» среди сегодняшних записей. "
+                    "Уточни название или скажи «удали последнюю запись»"
+                )
+            }
+    else:
+        target = entries[0]
+
+    if not delete_food_entry(target["id"], user_id):
+        return {"error": "не удалось удалить запись"}
+
+    from core.ai.chat_history import append_event
+    append_event(user_id, f"[событие: удалено «{target['product_name']}»]")
+
+    return {
+        "ok": True,
+        "deleted_id": target["id"],
+        "summary": (
+            f"Удалил: {target['product_name']}, "
+            f"{target['weight_g']:g} г — {target['calories']:g} ккал"
+        ),
+    }
+
+
+def _metric_day(user_id: int, date_arg) -> str:
+    """Локальная дата для метрик: None → сегодня, 'yesterday' → вчера, иначе ISO."""
+    from datetime import datetime, timedelta, timezone
+    from core.nutrition_tracker import _local_today, _tz_offset
+
+    if date_arg == "yesterday":
+        offset = _tz_offset(user_id)
+        today_local = (datetime.now(timezone.utc) + timedelta(minutes=offset)).date()
+        return (today_local - timedelta(days=1)).isoformat()
+    return date_arg or _local_today(user_id)
+
+
+def _tool_delete_workout_session(user_id: int, args: Dict) -> Dict:
+    """Удалить последнюю тренировку (или за указанную дату) с подходами."""
+    from core.database import get_db
+
+    day = _metric_day(user_id, (args or {}).get("date")) if (args or {}).get("date") else None
+    conn = get_db()
+    if day:
+        row = conn.execute(
+            "SELECT * FROM workout_sessions WHERE user_id = ? AND date = ? ORDER BY id DESC LIMIT 1",
+            (user_id, day),
+        ).fetchone()
+    else:
+        row = conn.execute(
+            "SELECT * FROM workout_sessions WHERE user_id = ? ORDER BY id DESC LIMIT 1",
+            (user_id,),
+        ).fetchone()
+    if not row:
+        return {"error": "тренировка не найдена — нечего удалять"}
+
+    session_id = row["id"]
+    conn.execute(
+        "DELETE FROM workout_sets WHERE workout_exercise_id IN "
+        "(SELECT id FROM workout_exercises WHERE session_id = ?)",
+        (session_id,),
+    )
+    conn.execute("DELETE FROM workout_exercises WHERE session_id = ?", (session_id,))
+    conn.execute("DELETE FROM workout_sessions WHERE id = ? AND user_id = ?", (session_id, user_id))
+    conn.commit()
+
+    from core.ai.chat_history import append_event
+    append_event(user_id, f"[событие: удалена тренировка от {row['date']}]")
+
+    return {
+        "ok": True,
+        "deleted_session_id": session_id,
+        "summary": f"Удалил тренировку от {row['date']} ({row['type']}, {row['duration_min']} мин)",
+    }
+
+
+def _tool_delete_health_metric(user_id: int, args: Dict) -> Dict:
+    """Удалить ручную метрику здоровья за день (сон/шаги/пульс/вес)."""
+    from core.database import get_db
+    from core.nutrition_tracker import _tz_offset
+
+    metric_type = str((args or {}).get("metric_type") or "").strip()
+    if metric_type not in ("steps", "sleep_hours", "resting_heart_rate", "weight"):
+        return {"error": "metric_type должен быть steps/sleep_hours/resting_heart_rate/weight"}
+    day = _metric_day(user_id, (args or {}).get("date"))
+
+    conn = get_db()
+    offset = _tz_offset(user_id)
+    cur = conn.execute(
+        f"""DELETE FROM health_metrics
+            WHERE user_id = ? AND metric_type = ?
+              AND date(ts, '{offset:+d} minutes') = ?
+              AND source IN ('manual', 'chat')""",
+        (user_id, metric_type, day),
+    )
+    conn.commit()
+    if cur.rowcount == 0:
+        return {"error": f"за {day} нет ручных записей «{metric_type}» — нечего удалять"}
+
+    from core.ai.chat_history import append_event
+    append_event(user_id, f"[событие: удалена метрика {metric_type} за {day}]")
+
+    names = {"steps": "шаги", "sleep_hours": "сон", "resting_heart_rate": "пульс покоя", "weight": "вес"}
+    return {
+        "ok": True,
+        "deleted_count": cur.rowcount,
+        "summary": f"Удалил: {names[metric_type]} за {day}",
+    }
+
+
+def _tool_log_water(user_id: int, args: Dict) -> Dict:
+    """Записать выпитую воду (мл)."""
+    from core.gamification import add_water, get_today_water
+
+    amount = _to_int((args or {}).get("amount_ml"))
+    if amount is None or not (1 <= amount <= 5000):
+        return {"error": "amount_ml должен быть от 1 до 5000 мл"}
+
+    total = add_water(user_id, amount)
+    from core.ai.chat_history import append_event
+    append_event(user_id, f"[событие: вода +{amount} мл]")
+
+    return {
+        "ok": True,
+        "amount_ml": amount,
+        "today_ml": total,
+        "summary": f"Записал воду: +{amount} мл (сегодня {total} мл)",
+    }
+
+
+def _tool_join_challenge(user_id: int, args: Dict) -> Dict:
+    """Вступить в челлендж по коду."""
+    from core.challenges import join_challenge, get_challenge_progress, CHALLENGES
+
+    code = str((args or {}).get("code") or "").strip()
+    if code not in CHALLENGES:
+        return {"error": f"неизвестный челлендж «{code}»; доступны: {', '.join(CHALLENGES)}"}
+
+    result = join_challenge(user_id, code)
+    if result.get("error"):
+        return result
+    progress = get_challenge_progress(user_id, code)
+    return {
+        "ok": True,
+        "summary": (
+            f"Ты в челлендже «{CHALLENGES[code]['name']}»! "
+            f"Прогресс: {progress.get('current', 0)}/{progress.get('target', 0)}"
+        ),
+    }
+
+
 _HANDLERS = {
     "log_food": _tool_log_food,
     "log_food_batch": _tool_log_food_batch,
+    "log_water": _tool_log_water,
+    "join_challenge": _tool_join_challenge,
+    "delete_food_entry": _tool_delete_food_entry,
+    "delete_workout_session": _tool_delete_workout_session,
+    "delete_health_metric": _tool_delete_health_metric,
     "adjust_last_food_entry": _tool_adjust_last_food_entry,
     "get_today_nutrition": _tool_get_today_nutrition,
     "get_nutrition_history": _tool_get_nutrition_history,
     "log_weight": _tool_log_weight,
+    "log_health_metric": _tool_log_health_metric,
     "update_profile": _tool_update_profile,
     "get_workout_plan_today": _tool_get_workout_plan_today,
     "log_workout_done": _tool_log_workout_done,
     "get_weekly_stats": _tool_get_weekly_stats,
     "set_training_preferences": _tool_set_training_preferences,
     "regenerate_workout_plan": _tool_regenerate_workout_plan,
+    "set_health_condition": _tool_set_health_condition,
     "set_food_preferences": _tool_set_food_preferences,
     "regenerate_meal_plan": _tool_regenerate_meal_plan,
 }

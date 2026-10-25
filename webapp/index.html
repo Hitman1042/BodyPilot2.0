@@ -19,6 +19,83 @@
         <p>Открой приложение через кнопку в боте<br><b>@BodyPilot2_bot</b></p>
     </div>
 
+    <!-- Онбординг: профиль ещё не создан -->
+    <div v-else-if="onboardingRequired" class="onboarding-screen">
+        <template v-if="onboardingStep === 'done'">
+            <div class="auth-emoji">🎉</div>
+            <h1>Добро пожаловать!</h1>
+            <p>Профиль готов. Твоя цель: <b>{{ onboardingResult.computed.daily_calorie_goal }} ккал/день</b>.</p>
+            <button class="btn btn-primary btn-block" @click="finishOnboarding">Начать пользоваться</button>
+        </template>
+        <template v-else>
+            <div class="auth-emoji">🤖</div>
+            <h1>BodyPilot</h1>
+            <p class="hint onboarding-progress">Шаг {{ onboardingStep + 1 }} из 8</p>
+            <div class="card onboarding-card">
+                <template v-if="onboardingStep === 0">
+                    <h2>Как тебя зовут?</h2>
+                    <input v-model.trim="onboardingForm.username" class="input" maxlength="100" placeholder="Имя" @keyup.enter="nextOnboarding">
+                </template>
+                <template v-else-if="onboardingStep === 1">
+                    <h2>Твой пол</h2>
+                    <div class="choice-grid">
+                        <button class="btn choice" :class="{selected: onboardingForm.gender === 'male'}" @click="onboardingForm.gender = 'male'">Мужской</button>
+                        <button class="btn choice" :class="{selected: onboardingForm.gender === 'female'}" @click="onboardingForm.gender = 'female'">Женский</button>
+                    </div>
+                </template>
+                <template v-else-if="onboardingStep === 2">
+                    <h2>Сколько тебе лет?</h2>
+                    <input v-model.number="onboardingForm.age" class="input" type="number" min="10" max="120" inputmode="numeric" placeholder="Возраст" @keyup.enter="nextOnboarding">
+                </template>
+                <template v-else-if="onboardingStep === 3">
+                    <h2>Твой рост</h2>
+                    <input v-model.number="onboardingForm.height_cm" class="input" type="number" min="81" max="299" inputmode="decimal" placeholder="Сантиметры" @keyup.enter="nextOnboarding">
+                </template>
+                <template v-else-if="onboardingStep === 4">
+                    <h2>Твой вес</h2>
+                    <input v-model.number="onboardingForm.weight_kg" class="input" type="number" min="21" max="499" step="0.1" inputmode="decimal" placeholder="Килограммы" @keyup.enter="nextOnboarding">
+                </template>
+                <template v-else-if="onboardingStep === 5">
+                    <h2>Какая цель?</h2>
+                    <div class="choice-list">
+                        <button class="btn choice" :class="{selected: onboardingForm.goal === 'lose'}" @click="onboardingForm.goal = 'lose'">Похудеть</button>
+                        <button class="btn choice" :class="{selected: onboardingForm.goal === 'maintain'}" @click="onboardingForm.goal = 'maintain'">Сохранить вес</button>
+                        <button class="btn choice" :class="{selected: onboardingForm.goal === 'gain'}" @click="onboardingForm.goal = 'gain'">Набрать массу</button>
+                    </div>
+                </template>
+                <template v-else-if="onboardingStep === 6">
+                    <h2>Твоя активность</h2>
+                    <div class="choice-list">
+                        <button class="btn choice" :class="{selected: onboardingForm.activity === 'sedentary'}" @click="onboardingForm.activity = 'sedentary'">Низкая</button>
+                        <button class="btn choice" :class="{selected: onboardingForm.activity === 'moderate'}" @click="onboardingForm.activity = 'moderate'">Средняя</button>
+                        <button class="btn choice" :class="{selected: onboardingForm.activity === 'high'}" @click="onboardingForm.activity = 'high'">Высокая</button>
+                    </div>
+                </template>
+                <template v-else>
+                    <h2>Ещё немного деталей</h2>
+                    <p class="hint">Можно пропустить и заполнить позже.</p>
+                    <label class="form-label">Аллергии</label>
+                    <input v-model.trim="onboardingForm.allergies" class="input" maxlength="500" placeholder="Например, орехи">
+                    <label class="form-label">Город</label>
+                    <input v-model.trim="onboardingForm.city" class="input" maxlength="100" placeholder="Город">
+                    <label class="form-label">Время утреннего дайджеста</label>
+                    <input v-model="onboardingForm.preferred_time" class="input" type="time">
+                </template>
+                <div class="sheet-row onboarding-actions">
+                    <button v-if="onboardingStep > 0" class="btn" :disabled="onboardingSaving" @click="onboardingStep -= 1">Назад</button>
+                    <button v-if="onboardingStep === 7" class="btn" :disabled="onboardingSaving" @click="completeOnboarding">Пропустить остальное</button>
+                    <button class="btn btn-primary" :disabled="onboardingSaving" @click="nextOnboarding">
+                        {{ onboardingSaving ? 'Сохраняю…' : (onboardingStep === 7 ? 'Готово' : 'Дальше') }}
+                    </button>
+                </div>
+            </div>
+        </template>
+    </div>
+
+    <div v-else-if="initializing" class="auth-screen">
+        <div class="skeleton-wrap onboarding-loading"><div class="skeleton sk-card"></div></div>
+    </div>
+
     <template v-else>
         <!-- Баннер потери связи -->
         <div v-if="offline" class="offline-banner">
@@ -31,6 +108,7 @@
             <div class="header-title">BodyPilot <span v-if="profile && profile.is_premium" class="badge-premium">PRO</span></div>
             <div class="header-right">
                 <span v-if="profile && profile.streak" class="header-streak">🔥 {{ profile.streak }}</span>
+                <button v-if="profile && profile.is_admin" class="settings-btn" title="Админка" @click="openAdmin">🔧</button>
                 <button class="settings-btn" title="Настройки профиля" @click="openSettings">⚙️</button>
             </div>
         </header>
@@ -99,9 +177,11 @@
                     </div>
 
                     <!-- Активность с часов -->
-                    <div class="card" v-if="hasHealthData">
-                        <div class="card-title">⌚ Активность</div>
-                        <ul class="ex-list">
+                    <div class="card">
+                        <div class="card-title">⌚ Активность
+                            <button class="btn btn-small" @click="activityOpen = true">＋ Записать</button>
+                        </div>
+                        <ul class="ex-list" v-if="hasHealthData">
                             <li v-if="health.steps_today != null">
                                 <span>👟 Шаги сегодня</span>
                                 <span class="hint">{{ fmt(health.steps_today) }}</span>
@@ -115,6 +195,7 @@
                                 <span class="hint">{{ fmt(health.resting_hr_today) }} уд/мин</span>
                             </li>
                         </ul>
+                        <div v-else class="hint">Шаги, сон и пульс можно записать вручную — кнопка «＋ Записать».</div>
                     </div>
 
                     <!-- Тренировка дня -->
@@ -196,6 +277,59 @@
                 </div>
                 <template v-else>
                     <div class="card">
+                        <div class="date-switch calendar-switch">
+                            <button class="btn btn-small" @click="shiftCalendarMonth(-1)">◀</button>
+                            <div class="date-label">{{ calendarTitle }}</div>
+                            <button class="btn btn-small" @click="shiftCalendarMonth(1)">▶</button>
+                        </div>
+                        <div class="calendar-weekdays"><span v-for="d in ['Пн','Вт','Ср','Чт','Пт','Сб','Вс']" :key="d">{{ d }}</span></div>
+                        <div class="activity-calendar" :class="{loading: calendarLoading}">
+                            <div v-for="(cell, index) in calendarCells" :key="index" class="calendar-cell"
+                                 :class="{empty: !cell, today: cell && cell.date === todayDate}">
+                                <template v-if="cell">
+                                    <span class="calendar-day">{{ Number(cell.date.slice(-2)) }}</span>
+                                    <span class="calendar-icons">
+                                        <i v-if="cell.has_food" :title="fmt(cell.calories) + ' ккал'">🍽</i>
+                                        <i v-if="cell.has_workout">🏋️</i>
+                                        <i v-if="cell.steps != null" :title="cell.steps + ' шагов'">👟</i>
+                                        <i v-if="cell.water_ml > 0" :title="cell.water_ml + ' мл'">💧</i>
+                                    </span>
+                                </template>
+                            </div>
+                        </div>
+                        <div class="calendar-legend">🍽 еда · 🏋️ тренировка · 👟 шаги · 💧 вода</div>
+                    </div>
+
+                    <div class="card">
+                        <div class="card-title">🏆 Личные рекорды</div>
+                        <ul v-if="topWeightRecords.length" class="ex-list">
+                            <li v-for="r in topWeightRecords" :key="(r.exercise_id || 'custom') + r.name">
+                                <span>{{ r.name }}</span>
+                                <span class="hint">{{ fmt(r.max_weight_kg) }} кг · до {{ r.max_reps }} повт.</span>
+                            </li>
+                        </ul>
+                        <div v-if="records && (records.session_tonnage || records.session_duration)" class="hint record-summary">
+                            <template v-if="records.session_tonnage">Тоннаж: {{ fmt(records.session_tonnage.value_kg) }} кг</template>
+                            <template v-if="records.session_duration"> · длительность: {{ records.session_duration.value_min }} мин</template>
+                        </div>
+                        <div v-if="records && (records.steps || records.protein)" class="hint record-summary">
+                            <template v-if="records.steps">👟 {{ fmt(records.steps.value) }}</template>
+                            <template v-if="records.protein"> · белок {{ fmt(records.protein.value_g) }} г</template>
+                        </div>
+                        <div v-if="!topWeightRecords.length && !(records && (records.steps || records.protein || records.session_tonnage || records.session_duration))" class="empty">Заверши тренировку — рекорды появятся здесь</div>
+                    </div>
+
+                    <div class="card">
+                        <div class="card-title">📈 Форма и усталость, 8 недель</div>
+                        <div v-if="freshness" class="hint freshness-line">
+                            Fitness {{ fmt(freshness.fitness) }} · Fatigue {{ fmt(freshness.fatigue) }} · Freshness {{ fmt(freshness.freshness) }}<br>
+                            {{ freshness.interpretation }}
+                        </div>
+                        <div v-if="loadCurves.length" class="chart-wrap"><canvas ref="loadChart"></canvas></div>
+                        <div v-else class="empty">Нет данных о нагрузке</div>
+                    </div>
+
+                    <div class="card">
                         <div class="card-title">⚖️ Вес, 30 дней</div>
                         <div v-if="weightHistory.length" class="chart-wrap"><canvas ref="weightChart"></canvas></div>
                         <div v-else class="empty">Пока нет данных о весе. Напиши боту свой вес ⚖️</div>
@@ -245,9 +379,49 @@
                         </div>
                     </div>
 
+                    <!-- Друзья -->
+                    <div class="card">
+                        <div class="card-title">👥 Друзья</div>
+                        <div v-if="!socialFeed.length" class="empty">
+                            Пригласи друзей по своей ссылке — будет веселее!<br>
+                            Здесь появятся их тренировки, рекорды и достижения.
+                        </div>
+                        <div v-for="item in socialFeed" :key="item.type + '_' + item.id" class="social-event">
+                            <div><b>{{ item.from_username }}</b>: {{ item.text }}</div>
+                            <div class="social-event-footer">
+                                <span v-if="item.kudos_count" class="hint">👏 {{ item.kudos_count }}</span>
+                                <button class="btn btn-small" :disabled="item.kudosed || kudosTarget === item.type + '_' + item.id"
+                                        @click="giveKudos(item)">
+                                    {{ item.kudosed ? '👏 Поддержано' : (kudosTarget === item.type + '_' + item.id ? '…' : '👏 Поддержать') }}
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="card">
+                        <div class="card-title">🎯 Челленджи с друзьями</div>
+                        <div v-for="code in ['food_30', 'workout_12', 'calorie_week']" :key="'group_' + code" class="challenge">
+                            <template v-if="groupChallenges[code]">
+                                <div class="challenge-head">
+                                    <span class="challenge-name">{{ groupChallenges[code].name }}</span>
+                                    <button v-if="!groupChallenges[code].user_joined" class="btn btn-small"
+                                            :disabled="joiningCode === code" @click="joinChallenge(code)">Участвовать</button>
+                                </div>
+                                <ul class="ex-list">
+                                    <li v-for="p in groupChallenges[code].participants" :key="code + '_' + p.user_id">
+                                        <span>{{ p.username }} <span v-if="p.status === 'not_joined'" class="hint">· не участвует</span></span>
+                                        <span class="hint">{{ p.current }} / {{ p.target }} {{ groupChallenges[code].unit }}</span>
+                                    </li>
+                                </ul>
+                            </template>
+                        </div>
+                    </div>
+
                     <!-- Фото прогресса -->
                     <div class="card">
-                        <div class="card-title">📸 Фото прогресса</div>
+                        <div class="card-title card-title-action">📸 Фото прогресса
+                            <button class="btn btn-small" @click="openPhotoUpload">＋ Добавить фото</button>
+                        </div>
                         <template v-if="photos.length">
                             <div v-if="photoDynamics" class="hint photo-dynamics">{{ photoDynamics }}</div>
                             <div class="photo-grid">
@@ -258,7 +432,6 @@
                             </div>
                         </template>
                         <div v-else class="empty">Фото пока нет 📷</div>
-                        <div class="hint photo-hint">Добавить фото — в боте: Прогресс → Фото прогресса</div>
                     </div>
                 </template>
             </section>
@@ -276,10 +449,17 @@
                         <div class="chat-text">{{ m.text }}</div>
                     </div>
                     <div v-if="chatSending" class="chat-msg chat-coach">
-                        <div class="chat-text hint">Коуч думает…</div>
+                        <div class="chat-text hint">{{ voiceSending ? 'Распознаю голос и думаю…' : 'Коуч думает…' }}</div>
                     </div>
                 </div>
-                <div class="chat-input">
+                <div v-if="voiceRecording" class="voice-recorder">
+                    <span class="voice-indicator">●</span>
+                    <b>{{ voiceTime() }} / 1:00</b>
+                    <button class="btn btn-small" @click="stopVoice(false)">Отмена</button>
+                    <button class="btn btn-primary btn-small" @click="stopVoice(true)">Отправить</button>
+                </div>
+                <div v-else class="chat-input">
+                    <button class="btn voice-btn" title="Голосовое сообщение" :disabled="chatSending" @click="startVoice">🎤</button>
                     <input v-model="chatInput" class="input" placeholder="Спроси коуча…"
                            maxlength="2000" :disabled="chatSending"
                            @keyup.enter="sendChat">
@@ -420,6 +600,59 @@
             </div>
         </div>
 
+        <!-- Загрузка фото прогресса -->
+        <div v-if="photoUploadOpen" class="sheet-backdrop" @click.self="closePhotoUpload">
+            <div class="sheet">
+                <div class="card-title">📸 Добавить фото прогресса</div>
+                <input class="input photo-file-input" type="file" accept="image/*" @change="selectPhoto">
+                <img v-if="photoPreview" :src="photoPreview" class="photo-upload-preview" alt="Превью фото">
+                <label class="form-label">Вес, кг (необязательно)</label>
+                <input v-model.number="photoForm.weight_kg" class="input" type="number" min="20" max="500" step="0.1" inputmode="decimal">
+                <label class="form-label">Заметка (необязательно)</label>
+                <textarea v-model="photoForm.note" class="input" maxlength="500" rows="3" placeholder="Например, первый месяц"></textarea>
+                <div class="sheet-row">
+                    <button class="btn" :disabled="photoUploading" @click="closePhotoUpload">Отмена</button>
+                    <button class="btn btn-primary" :disabled="!photoFile || photoUploading" @click="uploadPhoto">
+                        {{ photoUploading ? 'Загружаю…' : 'Загрузить' }}
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Админка -->
+        <div v-if="adminOpen" class="sheet-backdrop" @click.self="adminOpen = false">
+            <div class="sheet admin-sheet">
+                <div class="card-title">🔧 Админка</div>
+                <label class="form-label">Админ-ключ</label>
+                <div class="sheet-row admin-key-row">
+                    <input v-model="adminKey" class="input" type="password" placeholder="X-Admin-Key" @keyup.enter="loadAdminMetrics">
+                    <button class="btn btn-primary" :disabled="adminLoading" @click="loadAdminMetrics">Открыть</button>
+                </div>
+                <div v-if="adminLoading" class="skeleton sk-card"></div>
+                <template v-if="adminMetrics">
+                    <div class="admin-metrics">
+                        <div><b>{{ adminMetrics.users_total }}</b><span>Пользователи</span></div>
+                        <div><b>{{ adminMetrics.users_active_7d }}</b><span>Активные за 7 дней</span></div>
+                        <div><b>{{ adminMetrics.food_entries_24h }}</b><span>Еда за 24 часа</span></div>
+                        <div><b>{{ adminMetrics.ai_requests_24h }}</b><span>AI за 24 часа</span></div>
+                        <div><b>{{ adminMetrics.ai_requests_total }}</b><span>Всего AI-запросов</span></div>
+                        <div><b>{{ adminMetrics.premium_active }}</b><span>Активный Premium</span></div>
+                    </div>
+                    <div class="admin-grant">
+                        <div class="card-title">Выдать Premium</div>
+                        <label class="form-label">User ID</label>
+                        <input v-model.number="adminForm.user_id" class="input" type="number" min="1" inputmode="numeric">
+                        <label class="form-label">Дней</label>
+                        <input v-model.number="adminForm.days" class="input" type="number" min="1" max="3650" inputmode="numeric">
+                        <button class="btn btn-primary btn-block" :disabled="!adminForm.user_id || !adminForm.days || adminGranting" @click="grantPremium">
+                            {{ adminGranting ? 'Выдаю…' : 'Выдать Premium' }}
+                        </button>
+                    </div>
+                </template>
+                <button class="btn btn-block sheet-close" @click="adminOpen = false">Закрыть</button>
+            </div>
+        </div>
+
         <!-- Настройки профиля -->
         <div v-if="settingsOpen" class="sheet-backdrop" @click.self="settingsOpen = false">
             <div class="sheet">
@@ -449,6 +682,33 @@
                     <button class="btn" @click="settingsOpen = false">Отмена</button>
                     <button class="btn btn-primary" :disabled="settingsSaving" @click="saveSettings">
                         {{ settingsSaving ? 'Сохраняю…' : 'Сохранить' }}
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Форма записи активности -->
+        <div v-if="activityOpen" class="sheet-backdrop" @click.self="activityOpen = false">
+            <div class="sheet">
+                <div class="card-title">⌚ Записать активность</div>
+                <label class="form-label">Дата</label>
+                <select v-model="activityForm.date" class="input">
+                    <option value="today">Сегодня</option>
+                    <option value="yesterday">Вчера</option>
+                </select>
+                <label class="form-label">Шаги</label>
+                <input v-model.number="activityForm.steps" class="input" type="number"
+                       min="1" max="100000" placeholder="например 8500" inputmode="numeric">
+                <label class="form-label">Сон, часов</label>
+                <input v-model.number="activityForm.sleep_hours" class="input" type="number"
+                       min="0.5" max="24" step="0.5" placeholder="например 7.5" inputmode="decimal">
+                <label class="form-label">Пульс покоя, уд/мин (необязательно)</label>
+                <input v-model.number="activityForm.resting_heart_rate" class="input" type="number"
+                       min="30" max="220" inputmode="numeric">
+                <div class="sheet-row">
+                    <button class="btn" @click="activityOpen = false">Отмена</button>
+                    <button class="btn btn-primary" :disabled="activitySaving" @click="saveActivity">
+                        {{ activitySaving ? 'Сохраняю…' : 'Сохранить' }}
                     </button>
                 </div>
             </div>

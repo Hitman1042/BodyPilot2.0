@@ -12,14 +12,17 @@ from fastapi.staticfiles import StaticFiles
 
 from api.routers import (
     admin,
+    analytics,
     challenges,
     chat,
     health,
     health_data,
     nutrition,
+    onboarding,
     plans,
     profile,
     progress,
+    social,
     stats,
     water,
     workouts,
@@ -43,6 +46,7 @@ app.add_middleware(
 
 app.include_router(health.router)
 app.include_router(profile.router)
+app.include_router(onboarding.router)
 app.include_router(nutrition.router)
 app.include_router(workouts.router)
 app.include_router(stats.router)
@@ -54,6 +58,8 @@ app.include_router(water.router)
 app.include_router(chat.router)
 app.include_router(challenges.router)
 app.include_router(progress.router)
+app.include_router(analytics.router)
+app.include_router(social.router)
 
 # Статика Mini App (фронт собирается отдельным этапом)
 app.mount("/app", StaticFiles(directory="webapp", html=True), name="webapp")

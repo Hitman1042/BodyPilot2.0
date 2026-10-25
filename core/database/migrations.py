@@ -29,13 +29,15 @@ def run_migrations(conn: sqlite3.Connection) -> None:
     _migrate_v19(conn)
     _migrate_v20(conn)
     _migrate_v21(conn)
+    _migrate_v22(conn)
+    _migrate_v23(conn)
 
     # Установить текущую версию
     conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
     conn.commit()
 
 
-SCHEMA_VERSION = 21
+SCHEMA_VERSION = 23
 
 
 def _migrate_v1(conn: sqlite3.Connection) -> None:
@@ -897,4 +899,81 @@ def _migrate_v21(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE exercises ADD COLUMN category TEXT DEFAULT 'accessory'")
     except sqlite3.OperationalError:
         pass
+    conn.commit()
+
+
+def _migrate_v22(conn: sqlite3.Connection) -> None:
+    """Версия 22: справочник и пользовательские ограничения здоровья."""
+    version = conn.execute("PRAGMA user_version").fetchone()[0]
+    if version >= 22:
+        return
+
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS health_conditions (
+            code              TEXT PRIMARY KEY,
+            name_ru           TEXT NOT NULL,
+            category          TEXT NOT NULL
+                              CHECK(category IN ('injury','chronic','age','special')),
+            severity_default  INTEGER NOT NULL CHECK(severity_default BETWEEN 1 AND 3),
+            excluded_patterns TEXT NOT NULL DEFAULT '[]',
+            load_cap          REAL NOT NULL DEFAULT 1.0,
+            impact_forbidden  INTEGER NOT NULL DEFAULT 0 CHECK(impact_forbidden IN (0, 1)),
+            note_ru           TEXT NOT NULL DEFAULT ''
+        );
+
+        CREATE TABLE IF NOT EXISTS user_health_conditions (
+            user_id        INTEGER NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+            condition_code TEXT NOT NULL REFERENCES health_conditions(code),
+            severity       INTEGER NOT NULL DEFAULT 1 CHECK(severity BETWEEN 1 AND 3),
+            notes          TEXT NOT NULL DEFAULT '',
+            is_active      INTEGER NOT NULL DEFAULT 1 CHECK(is_active IN (0, 1)),
+            updated_at     TEXT NOT NULL DEFAULT (datetime('now')),
+            PRIMARY KEY (user_id, condition_code)
+        );
+        CREATE INDEX IF NOT EXISTS idx_user_health_conditions_active
+            ON user_health_conditions(user_id, is_active);
+    """)
+
+    existing = conn.execute("SELECT COUNT(*) FROM health_conditions").fetchone()[0]
+    if existing == 0:
+        import json
+        from core.safety import HEALTH_CONDITIONS
+
+        conn.executemany(
+            """INSERT INTO health_conditions
+               (code, name_ru, category, severity_default, excluded_patterns,
+                load_cap, impact_forbidden, note_ru)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            [
+                (
+                    item["code"], item["name_ru"], item["category"],
+                    item["severity_default"],
+                    json.dumps(item["excluded_patterns"], ensure_ascii=False),
+                    item["load_cap"], item["impact_forbidden"], item["note_ru"],
+                )
+                for item in HEALTH_CONDITIONS
+            ],
+        )
+    conn.commit()
+
+
+def _migrate_v23(conn: sqlite3.Connection) -> None:
+    """Версия 23: поддержка друзей (Kudos) для событий социальной ленты."""
+    version = conn.execute("PRAGMA user_version").fetchone()[0]
+    if version >= 23:
+        return
+
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS kudos (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            from_user_id INTEGER NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+            to_user_id   INTEGER NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+            target_type  TEXT NOT NULL
+                         CHECK(target_type IN ('workout','record','challenge','streak')),
+            target_id    INTEGER NOT NULL,
+            created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+            UNIQUE(from_user_id, to_user_id, target_type, target_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_kudos_to_user ON kudos(to_user_id);
+    """)
     conn.commit()

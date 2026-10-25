@@ -24,14 +24,55 @@ _WEEKDAYS_FULL = (
 )
 
 
-def add_metric(user_id: int, metric_type: str, value: float, source: str = "manual") -> None:
+def add_metric(
+        user_id: int,
+        metric_type: str,
+        value: float,
+        source: str = "manual",
+        ts: Optional[datetime] = None,
+) -> None:
     """Записать метрику здоровья (ручной ввод из бота или внешний источник)."""
+    timestamp = ts or datetime.now(timezone.utc)
+    if timestamp.tzinfo is None:
+        timestamp = timestamp.replace(tzinfo=timezone.utc)
+    timestamp = timestamp.astimezone(timezone.utc)
     conn = get_db()
     conn.execute(
         "INSERT INTO health_metrics (user_id, ts, metric_type, value, source) VALUES (?, ?, ?, ?, ?)",
-        (user_id, datetime.now(timezone.utc).isoformat(), metric_type, float(value), source),
+        (user_id, timestamp.isoformat(), metric_type, float(value), source),
     )
     conn.commit()
+
+
+def local_noon_utc(user_id: int, day: date) -> datetime:
+    """Полдень локальной даты пользователя в UTC."""
+    return datetime.combine(day, datetime.min.time()).replace(hour=12, tzinfo=timezone.utc) - timedelta(
+        minutes=_user_tz_offset(user_id)
+    )
+
+
+def replace_manual_metric(
+        user_id: int,
+        metric_type: str,
+        value: float,
+        source: str = "manual",
+        ts: Optional[datetime] = None,
+) -> None:
+    """Заменить ручную/chat-запись того же типа и локального дня, не трогая часы."""
+    timestamp = ts or datetime.now(timezone.utc)
+    if timestamp.tzinfo is None:
+        timestamp = timestamp.replace(tzinfo=timezone.utc)
+    timestamp = timestamp.astimezone(timezone.utc)
+    offset = _user_tz_offset(user_id)
+    local_day = (timestamp + timedelta(minutes=offset)).date().isoformat()
+    conn = get_db()
+    conn.execute(
+        """DELETE FROM health_metrics
+           WHERE user_id = ? AND metric_type = ?
+             AND source IN ('manual', 'chat') AND date(ts, ?) = ?""",
+        (user_id, metric_type, f"{offset:+d} minutes", local_day),
+    )
+    add_metric(user_id, metric_type, value, source=source, ts=timestamp)
 
 
 def _user_tz_offset(user_id: int) -> int:

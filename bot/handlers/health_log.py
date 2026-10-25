@@ -17,7 +17,14 @@ from aiogram.types import (
 )
 
 from core.database import get_user
-from core.health_data import add_metric, get_today_metrics, get_weekly_health_stats
+from core.health_data import (
+    _local_today,
+    _user_tz_offset,
+    get_today_metrics,
+    get_weekly_health_stats,
+    local_noon_utc,
+    replace_manual_metric,
+)
 
 logger = logging.getLogger(__name__)
 router = Router()
@@ -32,6 +39,17 @@ def _skip_kb(step: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="⏭ Пропустить", callback_data=f"act_skip_{step}")],
     ])
+
+
+def _date_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="📅 Сегодня", callback_data="act_day_today"),
+        InlineKeyboardButton(text="📆 Вчера", callback_data="act_day_yesterday"),
+    ]])
+
+
+def _day_word(data: dict) -> str:
+    return "вчера" if data.get("day_offset") == 1 else "сегодня"
 
 
 def _trend_text(pct: Optional[float]) -> str:
@@ -135,31 +153,60 @@ async def cmd_activity(message: Message, state: FSMContext, user_id: int = None)
         await message.answer("Сначала зарегистрируйся: /register")
         return
     await state.clear()
-    await state.set_state(ActivityLog.waiting_for_steps)
-    await _show_today(message, uid,
-                      "⌚ <b>Активность за день</b>")
-    await message.answer(
-        "Сколько шагов сегодня прошёл? (посмотри в приложении часов)\n"
-        "Напиши число, например: 8500",
-        reply_markup=_skip_kb("steps"),
-    )
+    await _show_today(message, uid, "⌚ <b>Активность за день</b>")
+    await message.answer("За какой день записать активность?", reply_markup=_date_kb())
 
 
 @router.callback_query(F.data == "activity_log")
 async def cb_activity(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
-    # callback.message.from_user — это бот; реальный пользователь — callback.from_user
     await cmd_activity(callback.message, state, user_id=callback.from_user.id)
 
 
-@router.callback_query(ActivityLog.waiting_for_steps, F.data == "act_skip_steps")
-async def skip_steps(callback: CallbackQuery, state: FSMContext):
+@router.callback_query(F.data.in_({"act_day_today", "act_day_yesterday"}))
+async def cb_activity_day(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
+    day_offset = 1 if callback.data == "act_day_yesterday" else 0
+    await state.clear()
+    await state.update_data(day_offset=day_offset)
+    await state.set_state(ActivityLog.waiting_for_steps)
+    day = "вчера" if day_offset else "сегодня"
+    await callback.message.answer(
+        f"Сколько шагов прошёл {day}? (посмотри в приложении часов)\n"
+        "Напиши число, например: 8500",
+        reply_markup=_skip_kb("steps"),
+    )
+
+
+@router.callback_query(F.data == "sleep_log")
+async def cb_sleep(callback: CallbackQuery, state: FSMContext):
+    await callback.answer()
+    uid = callback.from_user.id
+    if not get_user(uid):
+        await callback.message.answer("Сначала зарегистрируйся: /register")
+        return
+    await state.clear()
+    await state.update_data(day_offset=0)
     await state.set_state(ActivityLog.waiting_for_sleep)
     await callback.message.answer(
         "Сколько часов спал сегодня ночью? (например: 7.5)",
         reply_markup=_skip_kb("sleep"),
     )
+
+
+async def _ask_sleep(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    await state.set_state(ActivityLog.waiting_for_sleep)
+    await message.answer(
+        f"Сколько часов спал {_day_word(data)} ночью? (например: 7.5)",
+        reply_markup=_skip_kb("sleep"),
+    )
+
+
+@router.callback_query(ActivityLog.waiting_for_steps, F.data == "act_skip_steps")
+async def skip_steps(callback: CallbackQuery, state: FSMContext):
+    await callback.answer()
+    await _ask_sleep(callback.message, state)
 
 
 @router.message(ActivityLog.waiting_for_steps, F.text)
@@ -172,11 +219,8 @@ async def process_steps(message: Message, state: FSMContext):
         await message.answer("Напиши число шагов, например: 8500 (или нажми «Пропустить»)")
         return
     await state.update_data(steps=steps)
-    await state.set_state(ActivityLog.waiting_for_sleep)
-    await message.answer(
-        f"👟 Шаги: {steps:,}. А теперь сон: сколько часов спал? (например: 7.5)".replace(",", " "),
-        reply_markup=_skip_kb("sleep"),
-    )
+    await message.answer(f"👟 Шаги: {steps:,}".replace(",", " "))
+    await _ask_sleep(message, state)
 
 
 @router.callback_query(ActivityLog.waiting_for_sleep, F.data == "act_skip_sleep")
@@ -189,7 +233,7 @@ async def skip_sleep(callback: CallbackQuery, state: FSMContext):
 async def process_sleep(message: Message, state: FSMContext):
     try:
         hours = float(message.text.strip().replace(",", "."))
-        if not 0 < hours <= 24:
+        if not 0.5 <= hours <= 24:
             raise ValueError
     except (ValueError, AttributeError):
         await message.answer("Напиши часы сна, например: 7.5 (или нажми «Пропустить»)")
@@ -199,20 +243,24 @@ async def process_sleep(message: Message, state: FSMContext):
 
 
 async def _finish(message: Message, state: FSMContext, user_id: int) -> None:
+    from datetime import timedelta
+
     data = await state.get_data()
     await state.clear()
+    day = _local_today(_user_tz_offset(user_id)) - timedelta(days=data.get("day_offset", 0))
+    ts = local_noon_utc(user_id, day)
     saved = []
     if data.get("steps"):
-        add_metric(user_id, "steps", data["steps"], source="manual")
+        replace_manual_metric(user_id, "steps", data["steps"], source="manual", ts=ts)
         saved.append(f"👟 шаги: {int(data['steps']):,}".replace(",", " "))
     if data.get("sleep"):
-        add_metric(user_id, "sleep_hours", data["sleep"], source="manual")
+        replace_manual_metric(user_id, "sleep_hours", data["sleep"], source="manual", ts=ts)
         saved.append(f"😴 сон: {data['sleep']:g} ч")
     if not saved:
         await message.answer("Ничего не записал. Передумаешь — /activity")
         return
     await message.answer(
-        "✅ Записал: " + ", ".join(saved) + "\n\n"
+        f"✅ Записал за {_day_word(data)}: " + ", ".join(saved) + "\n\n"
         "Эти данные учтутся в утреннем дайджесте.\n"
         "💡 Чтобы iPhone присылал данные сам — нажми кнопку ниже.",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[

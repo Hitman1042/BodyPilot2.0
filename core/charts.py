@@ -446,3 +446,28 @@ def build_share_card(user_id: int) -> Optional[bytes]:
         return buffer.getvalue()
     finally:
         plt.close(fig)
+
+
+def chart_fitness(user_id: int) -> Optional[bytes]:
+    """Fitness/Fatigue и пунктирная Freshness за 8 недель."""
+    from .load import get_load_curves
+
+    curves = get_load_curves(user_id, weeks=8)
+    if not curves or not any(
+        point["effort"] > 0 or point["fitness"] > 0 or point["fatigue"] > 0
+        for point in curves
+    ):
+        return None
+    dates = [date.fromisoformat(point["date"]) for point in curves]
+    fig, ax = _new_figure("Форма и усталость за 8 недель")
+    ax.plot(dates, [point["fitness"] for point in curves], color=_ACCENT,
+            linewidth=2.4, label="Fitness")
+    ax.plot(dates, [point["fatigue"] for point in curves], color=_TARGET,
+            linewidth=2.2, label="Fatigue")
+    ax.plot(dates, [point["freshness"] for point in curves], color=_SECONDARY,
+            linewidth=2, linestyle="--", label="Freshness")
+    ax.axhline(0, color=_GRID, linewidth=1)
+    ax.xaxis.set_major_locator(mdates.AutoDateLocator(maxticks=8))
+    ax.xaxis.set_major_formatter(mdates.DateFormatter("%d.%m"))
+    ax.legend(frameon=False, loc="upper left", fontsize=11, ncols=3)
+    return _to_png(fig)

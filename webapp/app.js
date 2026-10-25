@@ -75,6 +75,16 @@
                     { key: "coach", emoji: "🤖", label: "Коуч" },
                 ],
                 authError: false,
+                initializing: true,
+                onboardingRequired: false,
+                onboardingStep: 0,
+                onboardingSaving: false,
+                onboardingResult: null,
+                onboardingForm: {
+                    username: "", gender: "male", age: null, height_cm: null, weight_kg: null,
+                    goal: "maintain", activity: "sedentary", allergies: "", city: "",
+                    timezone_offset: -new Date().getTimezoneOffset(), preferred_time: "07:00",
+                },
                 offline: false,
                 toast: "",
                 toastTimer: null,
@@ -84,13 +94,23 @@
                 water: null,
                 workoutToday: null,
                 health: null,
+                activityOpen: false,
+                activitySaving: false,
+                activityForm: { date: "today", steps: null, sleep_hours: null, resting_heart_rate: null },
                 diaryDate: localDate(new Date()),
+                todayDate: localDate(new Date()),
                 diaryEntries: [],
                 weightHistory: [],
                 nutritionSummary: [],
                 workoutHistory: [],
                 healthSteps: [],
                 healthSleep: [],
+                records: null,
+                loadCurves: [],
+                freshness: null,
+                calendarMonth: localDate(new Date()).slice(0, 7),
+                calendarDays: [],
+                calendarLoading: false,
                 mealPlan: null,
                 mealPlanError: 0,
                 workoutPlan: null,
@@ -106,16 +126,38 @@
                 saving: false,
                 challenges: [],
                 joiningCode: "",
+                socialFeed: [],
+                groupChallenges: { food_30: null, workout_12: null, calorie_week: null },
+                kudosTarget: "",
                 photos: [],
                 photoViewer: null,
+                photoUploadOpen: false,
+                photoUploading: false,
+                photoFile: null,
+                photoPreview: "",
+                photoForm: { weight_kg: null, note: "" },
                 chatMessages: [],
                 chatInput: "",
                 chatSending: false,
+                voiceRecording: false,
+                voiceSending: false,
+                voiceSeconds: 0,
                 settingsOpen: false,
                 settingsForm: { weight_kg: null, height_cm: null, age: null, goal: "maintain", activity: "sedentary" },
                 settingsSaving: false,
+                adminOpen: false,
+                adminKey: sessionStorage.getItem("bodypilotAdminKey") || "",
+                adminMetrics: null,
+                adminLoading: false,
+                adminGranting: false,
+                adminForm: { user_id: null, days: 30 },
                 _lastRetry: null,
                 _charts: {},
+                _mediaRecorder: null,
+                _voiceStream: null,
+                _voiceChunks: [],
+                _voiceTimer: null,
+                _voiceCancelled: false,
             };
         },
 
@@ -213,6 +255,26 @@
                     return { key: m.key, title: m.title, emoji: m.emoji, item: meals[m.key] };
                 });
             },
+            topWeightRecords: function () {
+                if (!this.records) return [];
+                return this.records.exercises.filter(function (r) {
+                    return r.max_weight_kg != null;
+                }).sort(function (a, b) {
+                    return b.max_weight_kg - a.max_weight_kg;
+                }).slice(0, 5);
+            },
+            calendarTitle: function () {
+                var parts = this.calendarMonth.split("-");
+                var d = new Date(Number(parts[0]), Number(parts[1]) - 1, 1);
+                var label = d.toLocaleDateString("ru-RU", { month: "long", year: "numeric" });
+                return label.charAt(0).toUpperCase() + label.slice(1);
+            },
+            calendarCells: function () {
+                var parts = this.calendarMonth.split("-");
+                var first = new Date(Number(parts[0]), Number(parts[1]) - 1, 1);
+                var blanks = (first.getDay() + 6) % 7;
+                return Array(blanks).fill(null).concat(this.calendarDays);
+            },
             photoDynamics: function () {
                 var withWeight = this.photos.filter(function (p) { return p.weight_kg; });
                 if (withWeight.length < 2) return "";
@@ -237,17 +299,22 @@
 
             // ── API ───────────────────────────────────────────
             api: async function (path, options) {
-                var headers = { "Content-Type": "application/json" };
+                options = Object.assign({}, options || {});
+                var headers = {};
                 if (tg && tg.initData) headers["X-Telegram-Init-Data"] = tg.initData;
+                var isMultipart = typeof FormData !== "undefined" && options.body instanceof FormData;
+                if (!isMultipart) headers["Content-Type"] = "application/json";
+                if (options.headers) Object.assign(headers, options.headers);
+                options.headers = headers;
                 var resp;
                 try {
-                    resp = await fetch(path, Object.assign({ headers: headers }, options || {}));
+                    resp = await fetch(path, options);
                 } catch (e) {
                     this.offline = true;
                     throw e;
                 }
                 if (resp.status === 401) {
-                    this.authError = true;
+                    if (!headers["X-Admin-Key"]) this.authError = true;
                     throw new ApiError(401, "unauthorized");
                 }
                 this.offline = false;
@@ -293,6 +360,135 @@
                 }
             },
 
+            // ── Первый запуск и онбординг ─────────────────────
+            bootstrap: async function () {
+                var self = this;
+                this.initializing = true;
+                try {
+                    this.profile = await this.api("/api/v1/profile");
+                    this.onboardingRequired = false;
+                } catch (e) {
+                    if (e instanceof ApiError && e.status === 404) {
+                        this.onboardingRequired = true;
+                        this.onboardingStep = 0;
+                        this.loading = { day: false, diary: false, progress: false, plans: false };
+                        var user = tg && tg.initDataUnsafe && tg.initDataUnsafe.user;
+                        if (user && !this.onboardingForm.username) {
+                            this.onboardingForm.username = user.first_name || user.username || "";
+                        }
+                        return;
+                    }
+                    if (e instanceof ApiError) return;
+                    this.offline = true;
+                    this._lastRetry = function () { self.bootstrap(); };
+                    return;
+                } finally {
+                    this.initializing = false;
+                }
+                this.loadDay();
+                this.loadDiary();
+                this.loadProgress();
+                this.loadPlans();
+            },
+
+            nextOnboarding: function () {
+                var step = this.onboardingStep;
+                var form = this.onboardingForm;
+                var valid = true;
+                if (step === 2) valid = form.age >= 10 && form.age <= 120;
+                if (step === 3) valid = form.height_cm > 80 && form.height_cm < 300;
+                if (step === 4) valid = form.weight_kg > 20 && form.weight_kg < 500;
+                if (!valid) {
+                    this.showToast("Проверь введённые данные");
+                    return;
+                }
+                if (step < 7) {
+                    this.onboardingStep += 1;
+                    if (tg && tg.HapticFeedback) tg.HapticFeedback.selectionChanged();
+                } else {
+                    this.completeOnboarding();
+                }
+            },
+
+            completeOnboarding: async function () {
+                if (this.onboardingSaving) return;
+                this.onboardingSaving = true;
+                try {
+                    var payload = Object.assign({}, this.onboardingForm);
+                    ["allergies", "city", "preferred_time"].forEach(function (key) {
+                        if (!payload[key]) payload[key] = null;
+                    });
+                    var result = await this.api("/api/v1/onboarding", {
+                        method: "POST",
+                        body: JSON.stringify(payload),
+                    });
+                    this.onboardingResult = result;
+                    this.profile = result.profile;
+                    this.onboardingStep = "done";
+                    if (tg && tg.HapticFeedback) tg.HapticFeedback.notificationOccurred("success");
+                } catch (e) {
+                    this.showToast(e instanceof ApiError ? ("Ошибка: " + e.message) : "Нет связи, попробуй ещё");
+                } finally {
+                    this.onboardingSaving = false;
+                }
+            },
+
+            finishOnboarding: function () {
+                this.onboardingRequired = false;
+                this.bootstrap();
+            },
+
+            // ── Админка ───────────────────────────────────────
+            adminHeaders: function () {
+                return { "X-Admin-Key": this.adminKey.trim() };
+            },
+
+            openAdmin: function () {
+                this.adminOpen = true;
+                if (this.adminKey) this.loadAdminMetrics();
+            },
+
+            loadAdminMetrics: async function () {
+                if (!this.adminKey.trim()) {
+                    this.showToast("Введи админ-ключ");
+                    return;
+                }
+                this.adminLoading = true;
+                try {
+                    this.adminMetrics = await this.api("/api/v1/admin/metrics", {
+                        headers: this.adminHeaders(),
+                    });
+                    sessionStorage.setItem("bodypilotAdminKey", this.adminKey.trim());
+                } catch (e) {
+                    this.showToast(e instanceof ApiError && e.status === 401 ? "Неверный админ-ключ" : "Не удалось загрузить метрики");
+                } finally {
+                    this.adminLoading = false;
+                }
+            },
+
+            grantPremium: async function () {
+                if (!this.adminForm.user_id || !this.adminForm.days || this.adminGranting) return;
+                this.adminGranting = true;
+                try {
+                    await this.api("/api/v1/admin/grant_premium", {
+                        method: "POST",
+                        headers: this.adminHeaders(),
+                        body: JSON.stringify({
+                            user_id: this.adminForm.user_id,
+                            days: this.adminForm.days,
+                        }),
+                    });
+                    sessionStorage.setItem("bodypilotAdminKey", this.adminKey.trim());
+                    this.showToast("✅ Premium выдан");
+                    this.adminForm.user_id = null;
+                    this.loadAdminMetrics();
+                } catch (e) {
+                    this.showToast(e instanceof ApiError ? ("Ошибка: " + e.message) : "Нет связи, попробуй ещё");
+                } finally {
+                    this.adminGranting = false;
+                }
+            },
+
             // ── Загрузчики ────────────────────────────────────
             loadDay: function () {
                 var self = this;
@@ -335,6 +531,36 @@
                 }
             },
 
+            saveActivity: async function () {
+                var f = this.activityForm;
+                var metrics = [];
+                var ts = f.date === "yesterday"
+                    ? new Date(Date.now() - 86400000).toISOString().slice(0, 11) + "12:00:00"
+                    : new Date().toISOString();
+                if (f.steps) metrics.push({ ts: ts, metric_type: "steps", value: f.steps, source: "miniapp" });
+                if (f.sleep_hours) metrics.push({ ts: ts, metric_type: "sleep_hours", value: f.sleep_hours, source: "miniapp" });
+                if (f.resting_heart_rate) metrics.push({ ts: ts, metric_type: "resting_heart_rate", value: f.resting_heart_rate, source: "miniapp" });
+                if (!metrics.length) {
+                    this.showToast("Заполни хотя бы одно поле");
+                    return;
+                }
+                this.activitySaving = true;
+                try {
+                    await this.api("/api/v1/health/metrics", {
+                        method: "POST",
+                        body: JSON.stringify({ metrics: metrics }),
+                    });
+                    this.activityOpen = false;
+                    this.activityForm = { date: "today", steps: null, sleep_hours: null, resting_heart_rate: null };
+                    this.showToast("✅ Активность записана");
+                    this.loadDay();
+                } catch (e) {
+                    if (!(e instanceof ApiError)) this.showToast("Нет связи, попробуй ещё");
+                } finally {
+                    this.activitySaving = false;
+                }
+            },
+
             loadDiary: function () {
                 var self = this;
                 var fn = function () { self.loadDiary(); };
@@ -354,6 +580,26 @@
                 this.loadDiary();
             },
 
+            loadCalendar: async function () {
+                this.calendarLoading = true;
+                try {
+                    var data = await this.api("/api/v1/analytics/calendar?month=" + this.calendarMonth);
+                    this.calendarDays = data.days || [];
+                } catch (e) {
+                    this.calendarDays = [];
+                    this.showToast(e instanceof ApiError ? ("Ошибка: " + e.message) : "Нет связи, попробуй ещё");
+                } finally {
+                    this.calendarLoading = false;
+                }
+            },
+
+            shiftCalendarMonth: function (delta) {
+                var parts = this.calendarMonth.split("-");
+                var d = new Date(Number(parts[0]), Number(parts[1]) - 1 + delta, 1);
+                this.calendarMonth = localDate(d).slice(0, 7);
+                this.loadCalendar();
+            },
+
             loadProgress: function () {
                 var self = this;
                 var fn = function () { self.loadProgress(); };
@@ -366,6 +612,13 @@
                         self.api("/api/v1/progress/photos"),
                         self.api("/api/v1/health/metrics?metric_type=steps&days=14"),
                         self.api("/api/v1/health/metrics?metric_type=sleep_hours&days=14"),
+                        self.api("/api/v1/records"),
+                        self.api("/api/v1/analytics/load?weeks=8"),
+                        self.api("/api/v1/analytics/calendar?month=" + self.calendarMonth),
+                        self.api("/api/v1/social/feed?limit=10"),
+                        self.api("/api/v1/social/challenge/food_30"),
+                        self.api("/api/v1/social/challenge/workout_12"),
+                        self.api("/api/v1/social/challenge/calorie_week"),
                     ]);
                     if (results[0].status === "fulfilled") self.weightHistory = results[0].value || [];
                     if (results[1].status === "fulfilled") self.nutritionSummary = results[1].value || [];
@@ -373,6 +626,16 @@
                     if (results[3].status === "fulfilled") self.challenges = results[3].value || [];
                     if (results[5].status === "fulfilled") self.healthSteps = results[5].value || [];
                     if (results[6].status === "fulfilled") self.healthSleep = results[6].value || [];
+                    if (results[7].status === "fulfilled") self.records = results[7].value;
+                    if (results[8].status === "fulfilled") {
+                        self.loadCurves = results[8].value.days || [];
+                        self.freshness = results[8].value.current;
+                    }
+                    if (results[9].status === "fulfilled") self.calendarDays = results[9].value.days || [];
+                    if (results[10].status === "fulfilled") self.socialFeed = results[10].value || [];
+                    ["food_30", "workout_12", "calorie_week"].forEach(function (code, index) {
+                        if (results[11 + index].status === "fulfilled") self.groupChallenges[code] = results[11 + index].value;
+                    });
                     if (results[4].status === "fulfilled") {
                         self.photos = results[4].value || [];
                         self.photos.forEach(function (p) { self.loadPhotoBlob(p); });
@@ -396,12 +659,33 @@
                     this.challenges = this.challenges.map(function (ch) {
                         return ch.code === code ? updated : ch;
                     });
+                    this.groupChallenges[code] = await this.api("/api/v1/social/challenge/" + code);
                     this.showToast("🎯 Ты в игре!");
                     if (tg && tg.HapticFeedback) tg.HapticFeedback.notificationOccurred("success");
                 } catch (e) {
                     this.showToast(e instanceof ApiError ? ("Ошибка: " + e.message) : "Нет связи, попробуй ещё");
                 } finally {
                     this.joiningCode = "";
+                }
+            },
+
+            // ── Друзья и Kudos ──────────────────────────────
+            giveKudos: async function (item) {
+                var key = item.type + "_" + item.id;
+                this.kudosTarget = key;
+                try {
+                    var result = await this.api("/api/v1/social/kudos", {
+                        method: "POST",
+                        body: JSON.stringify({ target_type: item.type, target_id: item.id }),
+                    });
+                    item.kudosed = true;
+                    item.kudos_count = result.count;
+                    this.showToast("Отправлено 👏");
+                    if (tg && tg.HapticFeedback) tg.HapticFeedback.notificationOccurred("success");
+                } catch (e) {
+                    this.showToast(e instanceof ApiError ? ("Ошибка: " + e.message) : "Нет связи, попробуй ещё");
+                } finally {
+                    this.kudosTarget = "";
                 }
             },
 
@@ -422,6 +706,58 @@
                 var d = (p.taken_at || "").slice(0, 10);
                 if (!d) return "";
                 return d.split("-").reverse().join(".");
+            },
+
+            openPhotoUpload: function () {
+                this.photoUploadOpen = true;
+            },
+
+            closePhotoUpload: function () {
+                if (this.photoUploading) return;
+                this.photoUploadOpen = false;
+                this.photoFile = null;
+                this.photoForm = { weight_kg: null, note: "" };
+                if (this.photoPreview) URL.revokeObjectURL(this.photoPreview);
+                this.photoPreview = "";
+            },
+
+            selectPhoto: function (event) {
+                var file = event.target.files && event.target.files[0];
+                if (!file) return;
+                if (!file.type.startsWith("image/")) {
+                    this.showToast("Выбери изображение");
+                    return;
+                }
+                if (this.photoPreview) URL.revokeObjectURL(this.photoPreview);
+                this.photoFile = file;
+                this.photoPreview = URL.createObjectURL(file);
+            },
+
+            refreshPhotos: async function () {
+                this.photos = await this.api("/api/v1/progress/photos") || [];
+                var self = this;
+                this.photos.forEach(function (photo) { self.loadPhotoBlob(photo); });
+            },
+
+            uploadPhoto: async function () {
+                if (!this.photoFile || this.photoUploading) return;
+                this.photoUploading = true;
+                try {
+                    var form = new FormData();
+                    form.append("photo", this.photoFile);
+                    if (this.photoForm.weight_kg) form.append("weight_kg", this.photoForm.weight_kg);
+                    if (this.photoForm.note.trim()) form.append("note", this.photoForm.note.trim());
+                    await this.api("/api/v1/progress/photos", { method: "POST", body: form });
+                    this.photoUploading = false;
+                    this.closePhotoUpload();
+                    await this.refreshPhotos();
+                    this.showToast("📸 Фото добавлено");
+                    if (tg && tg.HapticFeedback) tg.HapticFeedback.notificationOccurred("success");
+                } catch (e) {
+                    this.showToast(e instanceof ApiError ? ("Ошибка: " + e.message) : "Нет связи, попробуй ещё");
+                } finally {
+                    this.photoUploading = false;
+                }
             },
 
             // ── Настройки профиля ───────────────────────────
@@ -463,6 +799,93 @@
             },
 
             // ── AI-коуч ─────────────────────────────────────
+            voiceTime: function () {
+                var minutes = Math.floor(this.voiceSeconds / 60);
+                var seconds = String(this.voiceSeconds % 60).padStart(2, "0");
+                return minutes + ":" + seconds;
+            },
+
+            startVoice: async function () {
+                if (this.chatSending || this.voiceRecording) return;
+                if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || typeof MediaRecorder === "undefined") {
+                    this.showToast("Запись голоса не поддерживается в этом браузере");
+                    return;
+                }
+                try {
+                    this._voiceStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                    var options = {};
+                    if (MediaRecorder.isTypeSupported("audio/webm;codecs=opus")) {
+                        options.mimeType = "audio/webm;codecs=opus";
+                    }
+                    this._mediaRecorder = new MediaRecorder(this._voiceStream, options);
+                    this._voiceChunks = [];
+                    this._voiceCancelled = false;
+                    var self = this;
+                    this._mediaRecorder.ondataavailable = function (event) {
+                        if (event.data && event.data.size) self._voiceChunks.push(event.data);
+                    };
+                    this._mediaRecorder.onstop = function () {
+                        var blob = new Blob(self._voiceChunks, {
+                            type: self._mediaRecorder.mimeType || "audio/webm",
+                        });
+                        if (self._voiceStream) {
+                            self._voiceStream.getTracks().forEach(function (track) { track.stop(); });
+                        }
+                        self._voiceStream = null;
+                        if (!self._voiceCancelled && blob.size) self.uploadVoice(blob);
+                    };
+                    this.voiceSeconds = 0;
+                    this.voiceRecording = true;
+                    this._mediaRecorder.start(250);
+                    this._voiceTimer = setInterval(function () {
+                        self.voiceSeconds += 1;
+                        if (self.voiceSeconds >= 60) self.stopVoice(true);
+                    }, 1000);
+                    if (tg && tg.HapticFeedback) tg.HapticFeedback.impactOccurred("light");
+                } catch (e) {
+                    if (this._voiceStream) {
+                        this._voiceStream.getTracks().forEach(function (track) { track.stop(); });
+                    }
+                    this._voiceStream = null;
+                    this.showToast("Нет доступа к микрофону. Разреши доступ в настройках браузера");
+                }
+            },
+
+            stopVoice: function (send) {
+                if (!this.voiceRecording || !this._mediaRecorder) return;
+                this._voiceCancelled = !send;
+                this.voiceRecording = false;
+                clearInterval(this._voiceTimer);
+                this._voiceTimer = null;
+                if (this._mediaRecorder.state !== "inactive") this._mediaRecorder.stop();
+            },
+
+            uploadVoice: async function (blob) {
+                this.chatSending = true;
+                this.voiceSending = true;
+                this.scrollChat();
+                try {
+                    var form = new FormData();
+                    var extension = blob.type.indexOf("mpeg") >= 0 ? "mp3" : (blob.type.indexOf("mp4") >= 0 ? "m4a" : "webm");
+                    form.append("audio", blob, "voice." + extension);
+                    var resp = await this.api("/api/v1/chat/voice", { method: "POST", body: form });
+                    if (resp.transcript) {
+                        this.chatMessages.push({ role: "user", text: "🎤 Распознал: " + resp.transcript });
+                    }
+                    this.chatMessages.push({ role: "coach", text: resp.answer, tools: resp.tools_used || [] });
+                    if (resp.tools_used && resp.tools_used.length) {
+                        this.loadDay();
+                        this.loadDiary();
+                    }
+                } catch (e) {
+                    this.chatMessages.push({ role: "coach", text: "Не удалось обработать голосовое сообщение. Попробуй ещё раз 🙁" });
+                } finally {
+                    this.chatSending = false;
+                    this.voiceSending = false;
+                    this.scrollChat();
+                }
+            },
+
             sendChat: async function () {
                 var self = this;
                 var question = this.chatInput.trim();
@@ -651,6 +1074,50 @@
                 this.renderWorkoutChart(accent);
                 this.renderStepsChart(accent);
                 this.renderSleepChart(ok, danger);
+                this.renderLoadChart(accent, ok, danger);
+            },
+
+            renderLoadChart: function (accent, ok, danger) {
+                var el = this.$refs.loadChart;
+                if (!el || !this.loadCurves.length) return;
+                this.destroyChart("load");
+                this._charts.load = new Chart(el, {
+                    type: "line",
+                    data: {
+                        labels: this.loadCurves.map(function (p) { return p.date.slice(5); }),
+                        datasets: [
+                            {
+                                label: "Fitness",
+                                data: this.loadCurves.map(function (p) { return p.fitness; }),
+                                borderColor: accent,
+                                pointRadius: 0,
+                                tension: 0.25,
+                            },
+                            {
+                                label: "Fatigue",
+                                data: this.loadCurves.map(function (p) { return p.fatigue; }),
+                                borderColor: danger,
+                                pointRadius: 0,
+                                tension: 0.25,
+                            },
+                            {
+                                label: "Freshness",
+                                data: this.loadCurves.map(function (p) { return p.freshness; }),
+                                borderColor: ok,
+                                borderDash: [6, 4],
+                                pointRadius: 0,
+                                tension: 0.25,
+                            },
+                        ],
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        animation: false,
+                        interaction: { mode: "index", intersect: false },
+                        plugins: { legend: { position: "bottom" } },
+                    },
+                });
             },
 
             destroyChart: function (key) {
@@ -880,10 +1347,7 @@
                     });
                 }
             }
-            this.loadDay();
-            this.loadDiary();
-            this.loadProgress();
-            this.loadPlans();
+            this.bootstrap();
         },
     });
 

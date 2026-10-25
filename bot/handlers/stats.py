@@ -8,7 +8,7 @@ from aiogram.filters import Command
 from aiogram.types import Message
 
 from core.database import (
-    get_user, get_weekly_stats,
+    get_db, get_user, get_weekly_stats,
     get_weight_log, get_weight_history,
     get_tonnage_history,
 )
@@ -22,6 +22,29 @@ router = Router()
 
 def _get_user_id(message: Message, user_id: int = None) -> int:
     return user_id if user_id else message.from_user.id
+
+
+def _active_days_last_week(user_id: int, user: dict) -> int:
+    offset = int(user.get("timezone_offset") or 0)
+    today = (datetime.now(timezone.utc) + timedelta(minutes=offset)).date()
+    first_day = today - timedelta(days=6)
+    cutoff = (first_day - timedelta(days=1)).isoformat()
+    conn = get_db()
+    days = {
+        row["date"] for row in conn.execute(
+            "SELECT DISTINCT date FROM workout_sessions WHERE user_id = ? AND date >= ? AND date <= ?",
+            (user_id, first_day.isoformat(), today.isoformat()),
+        ).fetchall()
+    }
+    food_rows = conn.execute(
+        """SELECT DISTINCT date(logged_at, ?) AS day FROM food_log_new
+           WHERE user_id = ? AND logged_at >= ?""",
+        (f"{offset:+d} minutes", user_id, cutoff),
+    ).fetchall()
+    for row in food_rows:
+        if row["day"] and first_day.isoformat() <= row["day"] <= today.isoformat():
+            days.add(row["day"])
+    return len(days)
 
 
 @router.message(Command("stats"))
@@ -83,6 +106,7 @@ async def cmd_stats(message: Message, user_id: int = None):
         f"{cal_bar} от цели ({avg_cal:.0f} ккал/день) {cal_trend}",
         f"Белка: {stats['total_protein_g']:.0f} г {status_icon(stats['total_protein_g'], 7 * metrics['protein_g_target'])}",
         f"Приёмов пищи: {len(food_log)}",
+        f"Активных дней за неделю: {_active_days_last_week(uid, user)}/7",
         "",
         f"🏋️ <b>Тренировки</b>",
         f"Дней: {stats['workout_days']} из 7",

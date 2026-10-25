@@ -75,9 +75,13 @@ def get_progress_menu() -> InlineKeyboardMarkup:
         ],
         [
             InlineKeyboardButton(text="⌚ Активность (шаги, сон)", callback_data="activity_log"),
+            InlineKeyboardButton(text="😴 Записать сон", callback_data="sleep_log"),
         ],
         [
             InlineKeyboardButton(text="📊 Статистика 7 дней", callback_data="stats_week"),
+        ],
+        [
+            InlineKeyboardButton(text="🏆 Рекорды", callback_data="records"),
         ],
         [
             InlineKeyboardButton(text="📅 Отчёт за неделю", callback_data="week_report"),
@@ -117,6 +121,9 @@ def get_settings_menu() -> InlineKeyboardMarkup:
         ],
         [
             InlineKeyboardButton(text="🔗 Рефералы", callback_data="ref_menu"),
+        ],
+        [
+            InlineKeyboardButton(text="👥 Друзья", callback_data="social_menu"),
         ],
         [
             InlineKeyboardButton(text="❓ Помощь", callback_data="help_guide"),

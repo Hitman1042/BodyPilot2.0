@@ -267,8 +267,34 @@ async def handle_free_text(message: Message, state: FSMContext, user_id: int = N
                 await message.answer("🤔 Не понял. Попробуй переформулировать или открой меню.")
             return
 
+        # 0.5. Несколько строк = список блюд → сразу коучу (log_food_batch):
+        #    одноэлементная карточка склеила бы всё в одну запись
+        if len([line for line in text.splitlines() if line.strip()]) > 1:
+            answer = await _ask_coach(uid, user, text, direct=True)
+            await message.bot.delete_message(message.chat.id, status_message.message_id)
+            if answer:
+                await message.answer(answer)
+            else:
+                await message.answer("🤔 Не понял. Попробуй переформулировать или открой меню.")
+            return
+
         # 1. Пробуем распознать еду
         food_result = await client.recognize_food_from_text(text)
+
+        # Несколько блюд одним сообщением: распознаватель вернул список —
+        # отдаём коучу, он запишет всё через log_food_batch
+        if isinstance(food_result, dict) and isinstance(food_result.get("items"), list):
+            food_result = food_result["items"]
+        if isinstance(food_result, list):
+            if len(food_result) > 1:
+                answer = await _ask_coach(uid, user, text, direct=True)
+                await message.bot.delete_message(message.chat.id, status_message.message_id)
+                if answer:
+                    await message.answer(answer)
+                else:
+                    await message.answer("🤔 Не понял. Попробуй переформулировать или открой меню.")
+                return
+            food_result = food_result[0] if food_result else None
 
         if food_result and food_result.get("error") == "rate_limit":
             await message.bot.delete_message(message.chat.id, status_message.message_id)

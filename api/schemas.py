@@ -34,6 +34,7 @@ class ProfileOut(BaseModel):
     sport_level: Optional[str] = None
     referral_code: Optional[str] = None
     is_premium: bool = False
+    is_admin: bool = False
     streak: Optional[int] = None
 
 
@@ -45,6 +46,36 @@ class ProfileUpdate(BaseModel):
     goal: Optional[Literal["lose", "maintain", "gain"]] = None
     activity: Optional[Literal["sedentary", "moderate", "high"]] = None
     allergies: Optional[str] = Field(default=None, max_length=500)
+
+
+class OnboardingIn(BaseModel):
+    username: Optional[str] = Field(default=None, max_length=100)
+    gender: Literal["male", "female"]
+    age: int = Field(ge=10, le=120)
+    height_cm: float = Field(gt=80, lt=300)
+    weight_kg: float = Field(gt=20, lt=500)
+    goal: Literal["lose", "maintain", "gain"]
+    activity: Literal["sedentary", "moderate", "high"]
+    allergies: Optional[str] = Field(default=None, max_length=500)
+    city: Optional[str] = Field(default=None, max_length=100)
+    timezone_offset: Optional[int] = Field(default=None, ge=-720, le=840)
+    preferred_time: Optional[str] = Field(default=None, pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
+
+
+class ComputedProfileOut(BaseModel):
+    bmi: float
+    bmi_category: str
+    bmr: int
+    tdee: int
+    daily_calorie_goal: int
+    protein_g_target: float
+    fat_g_target: float
+    carbs_g_target: float
+
+
+class OnboardingOut(BaseModel):
+    profile: ProfileOut
+    computed: ComputedProfileOut
 
 
 # ── Питание ──────────────────────────────────────────────────────────────
@@ -214,6 +245,10 @@ class ChatOut(BaseModel):
     tools_used: list[str] = []
 
 
+class VoiceChatOut(ChatOut):
+    transcript: str = ""
+
+
 # ── Челленджи ────────────────────────────────────────────────────────────
 
 class ChallengeOut(BaseModel):
@@ -229,6 +264,47 @@ class ChallengeOut(BaseModel):
     streak_days: int = 0
     start_date: Optional[str] = None
     end_date: Optional[str] = None
+
+
+# ── Друзья и Kudos ───────────────────────────────────────────────────────
+
+class SocialFeedItemOut(BaseModel):
+    id: int
+    type: Literal["workout", "record", "challenge", "streak"]
+    text: str
+    from_user_id: int
+    from_username: str
+    date: str
+    kudos_count: int = 0
+    kudosed: bool = False
+
+
+class KudosIn(BaseModel):
+    target_type: Literal["workout", "record", "challenge", "streak"]
+    target_id: int
+
+
+class KudosOut(BaseModel):
+    ok: bool
+    to_user_id: Optional[int] = None
+    count: int = 0
+
+
+class GroupChallengeParticipantOut(BaseModel):
+    user_id: int
+    username: str
+    current: int
+    target: int
+    status: str
+    is_self: bool = False
+
+
+class GroupChallengeOut(BaseModel):
+    code: str
+    name: str
+    unit: str
+    participants: list[GroupChallengeParticipantOut]
+    user_joined: bool
 
 
 # ── Фото прогресса ───────────────────────────────────────────────────────
@@ -330,3 +406,83 @@ class AdminMetricsOut(BaseModel):
     ai_requests_24h: int
     ai_requests_total: int
     premium_active: int
+
+
+class AdminGrantPremiumIn(BaseModel):
+    user_id: int
+    days: int = Field(ge=1, le=3650)
+
+
+class AdminGrantPremiumOut(BaseModel):
+    user_id: int
+    days: int
+    expires_at: str
+
+
+# ── Рекорды и аналитика нагрузки ─────────────────────────────────────────
+
+class ExerciseRecordOut(BaseModel):
+    exercise_id: Optional[int] = None
+    name: str
+    max_weight_kg: Optional[float] = None
+    max_weight_date: Optional[str] = None
+    max_reps: Optional[int] = None
+    max_reps_date: Optional[str] = None
+
+
+class SessionRecordOut(BaseModel):
+    value_kg: Optional[float] = None
+    value_min: Optional[int] = None
+    date: str
+    session_id: int
+
+
+class StepsRecordOut(BaseModel):
+    value: int
+    date: str
+
+
+class ProteinRecordOut(BaseModel):
+    value_g: float
+    date: str
+
+
+class PersonalRecordsOut(BaseModel):
+    exercises: list[ExerciseRecordOut]
+    session_tonnage: Optional[SessionRecordOut] = None
+    session_duration: Optional[SessionRecordOut] = None
+    steps: Optional[StepsRecordOut] = None
+    protein: Optional[ProteinRecordOut] = None
+
+
+class LoadPointOut(BaseModel):
+    date: str
+    effort: float
+    fitness: float
+    fatigue: float
+    freshness: float
+
+
+class FreshnessOut(LoadPointOut):
+    interpretation: str
+    history_days: int
+
+
+class LoadOut(BaseModel):
+    weeks: int
+    days: list[LoadPointOut]
+    current: FreshnessOut
+
+
+class CalendarDayOut(BaseModel):
+    date: str
+    has_food: bool
+    has_workout: bool
+    steps: Optional[int] = None
+    water_ml: int = 0
+    calories: float = 0
+
+
+class CalendarOut(BaseModel):
+    month: str
+    days: list[CalendarDayOut]

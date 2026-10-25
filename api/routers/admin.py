@@ -4,11 +4,13 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 
 from api.auth import require_admin
 from api.deps import get_db
-from api.schemas import AdminMetricsOut
+from api.schemas import AdminGrantPremiumIn, AdminGrantPremiumOut, AdminMetricsOut
+from core.database import get_user
+from core.database.premium import activate_premium
 
 router = APIRouter(
     prefix="/api/v1/admin",
@@ -57,4 +59,23 @@ def admin_metrics() -> AdminMetricsOut:
         ai_requests_24h=ai_requests_24h,
         ai_requests_total=ai_requests_total,
         premium_active=premium_active,
+    )
+
+
+@router.post("/grant_premium", response_model=AdminGrantPremiumOut)
+def grant_premium(payload: AdminGrantPremiumIn) -> AdminGrantPremiumOut:
+    if not get_user(payload.user_id):
+        raise HTTPException(status_code=404, detail="User not found")
+    result = activate_premium(
+        user_id=payload.user_id,
+        days=payload.days,
+        source="admin",
+        extend=True,
+    )
+    if not result.get("success"):
+        raise HTTPException(status_code=500, detail="Failed to grant Premium")
+    return AdminGrantPremiumOut(
+        user_id=payload.user_id,
+        days=payload.days,
+        expires_at=result["expires_at"],
     )

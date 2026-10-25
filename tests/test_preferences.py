@@ -133,6 +133,44 @@ def test_describe_preferences():
     assert describe_preferences(dict(DEFAULTS)) is None
 
 
+def test_protein_examples_vegan(pref_user, db_conn):
+    from core.preferences import protein_examples
+
+    db_conn.execute("UPDATE users SET allergies = '' WHERE user_id = ?", (pref_user,))
+    db_conn.commit()
+    set_preferences(pref_user, food_exclusions="", food_notes="Я ВЕГАН")
+
+    examples = protein_examples(pref_user)
+    assert "курица" not in examples
+    assert "яйца" not in examples
+    assert "творог" not in examples
+    assert "бобовые" in examples and "тофу" in examples
+
+
+def test_protein_examples_vegetarian_keeps_eggs(pref_user, db_conn):
+    from core.preferences import protein_examples
+
+    db_conn.execute("UPDATE users SET allergies = '' WHERE user_id = ?", (pref_user,))
+    db_conn.commit()
+    set_preferences(pref_user, food_exclusions="", food_notes="вегетарианец")
+
+    examples = protein_examples(pref_user)
+    assert "курица" not in examples and "рыба" not in examples
+    assert "яйца" in examples and "творог" in examples
+
+
+def test_protein_examples_peanut_allergy(pref_user, db_conn):
+    from core.preferences import protein_examples
+
+    db_conn.execute("UPDATE users SET allergies = 'Арахис' WHERE user_id = ?", (pref_user,))
+    db_conn.commit()
+    set_preferences(pref_user, food_exclusions="", food_notes="")
+
+    examples = protein_examples(pref_user)
+    assert "орехи" not in examples
+    assert "курица" in examples
+
+
 # ── set_training_preferences: валидация и перегенерация плана ────────────
 
 def test_tool_set_training_preferences_invalid_place(pref_user):

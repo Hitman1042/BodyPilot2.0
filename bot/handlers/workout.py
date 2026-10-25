@@ -296,18 +296,26 @@ async def fb_soreness(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(WorkoutFeedback.energy, F.data.startswith("fb_energy_"))
 async def fb_energy(callback: CallbackQuery, state: FSMContext):
+    await callback.answer()
     energy = int(callback.data.rsplit("_", 1)[1])
     data = await state.get_data()
+    user_id = data.get("fb_user_id") or callback.from_user.id
+    session_id = data.get("fb_session_id")
     save_workout_feedback(
-        user_id=data.get("fb_user_id") or callback.from_user.id,
-        session_id=data.get("fb_session_id"),
+        user_id=user_id,
+        session_id=session_id,
         difficulty=data.get("fb_difficulty"),
         soreness=data.get("fb_soreness"),
         energy=energy,
     )
     await state.clear()
     await callback.message.edit_text("Спасибо! Учту это при составлении следующего плана 💪")
-    await callback.answer()
+    if session_id is not None:
+        from core.records import check_new_records
+
+        records = check_new_records(user_id, session_id)
+        if records:
+            await callback.message.answer("\n".join(html.escape(record) for record in records))
 
 
 # ── /add_exercise ─────────────────────────────────────────────────────────

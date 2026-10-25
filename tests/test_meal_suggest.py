@@ -113,3 +113,14 @@ def test_suggest_meals_rules_fallback(suggest_user):
 
 def test_suggest_meals_unknown_user():
     assert asyncio.run(suggest_meals(99999999, use_ai=False)) is None
+
+
+def test_suggest_meals_vegan_excludes_animal_products(suggest_user):
+    from core.preferences import set_preferences
+
+    set_preferences(suggest_user, food_exclusions="", food_notes="vegan")
+    result = asyncio.run(suggest_meals(suggest_user, use_ai=False))
+
+    names = [meal["name"] for meal in result["suggestions"]]
+    assert names
+    assert all("куриц" not in name.lower() for name in names)

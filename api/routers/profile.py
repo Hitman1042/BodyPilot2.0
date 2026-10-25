@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from api.auth import get_current_user_id
 from api.schemas import ProfileOut, ProfileUpdate
+from core.config import settings
 from core.database import get_user, log_weight, update_user
 from core.gamification import get_streak
 from core.referrals import check_subscription_active
@@ -17,10 +18,16 @@ def _build_profile(user_id: int) -> ProfileOut:
     user = get_user(user_id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
+    admin_ids = {
+        item.strip()
+        for item in (settings.TELEGRAM_ADMIN_USER_IDS or "").split(",")
+        if item.strip()
+    }
     return ProfileOut(
         **{k: user.get(k) for k in ProfileOut.model_fields
-           if k not in ("is_premium", "streak")},
+           if k not in ("is_premium", "is_admin", "streak")},
         is_premium=check_subscription_active(user_id),
+        is_admin=str(user_id) in admin_ids,
         streak=get_streak(user_id)["current"],
     )
 

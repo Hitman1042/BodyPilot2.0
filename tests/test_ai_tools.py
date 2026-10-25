@@ -16,10 +16,11 @@ def test_tool_declarations_valid():
         assert decl["description"]
         assert decl["parameters"]["type"] == "object"
     assert names == {
-        "log_food", "log_food_batch", "adjust_last_food_entry", "get_today_nutrition",
-        "get_nutrition_history", "log_weight", "update_profile",
+        "log_food", "log_food_batch", "log_water", "join_challenge", "delete_food_entry", "delete_workout_session",
+        "delete_health_metric", "adjust_last_food_entry", "get_today_nutrition",
+        "get_nutrition_history", "log_weight", "log_health_metric", "update_profile",
         "get_workout_plan_today", "log_workout_done", "get_weekly_stats",
-        "set_training_preferences", "regenerate_workout_plan",
+        "set_training_preferences", "regenerate_workout_plan", "set_health_condition",
         "set_food_preferences", "regenerate_meal_plan",
     }
 
@@ -91,6 +92,58 @@ def test_log_weight_valid(test_user):
     result = execute_tool(test_user, "log_weight", {"weight_kg": 82.5})
     assert result["ok"] is True
     assert get_user(test_user)["weight_kg"] == 82.5
+
+
+def test_log_health_metric_yesterday_is_replaced(test_user, db_conn):
+    from datetime import datetime, timedelta
+
+    from core.health_data import _local_today
+
+    db_conn.execute("UPDATE users SET timezone_offset = 180 WHERE user_id = ?", (test_user,))
+    db_conn.execute("DELETE FROM health_metrics WHERE user_id = ? AND metric_type = 'steps'", (test_user,))
+    db_conn.commit()
+
+    execute_tool(test_user, "log_health_metric", {
+        "metric_type": "steps", "value": 7000, "date": "yesterday",
+    })
+    result = execute_tool(test_user, "log_health_metric", {
+        "metric_type": "steps", "value": 8400, "date": "yesterday",
+    })
+
+    assert result["ok"] is True
+    assert result["summary"] == "Обновил шаги за вчера: 8 400"
+    yesterday = (_local_today(180) - timedelta(days=1)).isoformat()
+    rows = db_conn.execute(
+        """SELECT ts, value, source FROM health_metrics
+           WHERE user_id = ? AND metric_type = 'steps'
+             AND date(ts, '+180 minutes') = ?""",
+        (test_user, yesterday),
+    ).fetchall()
+    assert len(rows) == 1
+    assert rows[0]["value"] == 8400 and rows[0]["source"] == "chat"
+    assert datetime.fromisoformat(rows[0]["ts"]).hour == 9  # 12:00 при UTC+3
+
+
+def test_log_health_metric_sleep_now(test_user):
+    result = execute_tool(test_user, "log_health_metric", {
+        "metric_type": "sleep_hours", "value": 7.5,
+    })
+    assert result["ok"] is True
+    assert result["summary"] == "Записал сон: 7.5 ч"
+
+
+@pytest.mark.parametrize("args", [
+    {"metric_type": "unknown", "value": 10},
+    {"metric_type": "steps", "value": 0},
+    {"metric_type": "steps", "value": 100001},
+    {"metric_type": "sleep_hours", "value": 0.4},
+    {"metric_type": "sleep_hours", "value": 25},
+    {"metric_type": "resting_heart_rate", "value": 29},
+    {"metric_type": "weight", "value": 401},
+    {"metric_type": "steps", "value": 100, "date": "31.12.2025"},
+])
+def test_log_health_metric_validation(test_user, args):
+    assert "error" in execute_tool(test_user, "log_health_metric", args)
 
 
 def test_get_today_nutrition(test_user):
